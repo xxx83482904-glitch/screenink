@@ -33,7 +33,13 @@ jobs:
 
       - run: npm test
 
-      - name: ビルドして Release に公開
-        run: npx electron-builder --win --x64 --arm64 --publish always
+      # electron-builder に公開まで任せると、ファイルを並行して上げる際に同じタグの Release が
+      # 2つ出来ることがある。ビルドだけさせて、公開は gh で1回にまとめる。
+      - name: ビルド
+        run: npx electron-builder --win --x64 --arm64 --publish never
+
+      - name: Release に公開
+        shell: bash
+        run: gh release create "$GITHUB_REF_NAME" dist/*.exe dist/*.blockmap dist/latest.yml --title "ScreenInk $GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
