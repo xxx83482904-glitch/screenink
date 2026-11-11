@@ -1,17 +1,68 @@
 {
   "name": "screenink",
   "productName": "ScreenInk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Capture the screen and draw on it with a pen",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "pack": "npx --yes @electron/packager . ScreenInk --platform=win32 --out=dist --overwrite --icon=assets/icon.png",
+    "pack": "electron-builder --win --x64 --dir",
     "test": "node --test test/geom.test.js",
     "test:e2e": "electron test/e2e.js",
-    "test:main": "electron test/main-e2e.js"
+    "test:main": "electron test/main-e2e.js",
+    "dist": "electron-builder --win --x64 --arm64 --publish never"
   },
   "devDependencies": {
-    "electron": "^45.3.0"
+    "electron": "^45.3.0",
+    "electron-builder": "^26.18.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  },
+  "author": "THE TRIANGLE",
+  "build": {
+    "appId": "jp.the-triangle.screenink",
+    "productName": "ScreenInk",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "overlay.html",
+      "overlay.js",
+      "ink-geom.js",
+      "launcher.html",
+      "launcher.js",
+      "update.html",
+      "update.js",
+      "assets/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "ScreenInk-Setup-${version}-${arch}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "xxx83482904-glitch",
+        "repo": "ScreenInk",
+        "releaseType": "release"
+      }
+    ]
   }
 }

@@ -1,0 +1,39 @@
+# v で始まるタグを push すると、Windows 用インストーラー（x64 / arm64）をビルドして GitHub Release に載せる。
+# アプリ内アップデート（electron-updater）は、この Release の latest.yml とインストーラーを見に行く。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: タグと package.json の version が一致しているか
+        shell: bash
+        run: |
+          want="v$(node -p "require('./package.json').version")"
+          if [ "$want" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::タグ $GITHUB_REF_NAME と package.json の version ($want) が一致しません"
+            exit 1
+          fi
+
+      - run: npm test
+
+      - name: ビルドして Release に公開
+        run: npx electron-builder --win --x64 --arm64 --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

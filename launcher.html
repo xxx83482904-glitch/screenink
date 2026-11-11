@@ -16,6 +16,10 @@
     font-size: 11px; line-height: 1.25; width: 48px; height: 48px; padding: 0; border-radius: 10px; cursor: pointer; }
   button:hover { background: rgba(255, 255, 255, 0.12); }
   button.accent { background: #ff453a; color: #fff; }
+  /* 新しいバージョンがあるときは「更新」に印を付ける */
+  #update { position: relative; }
+  body[data-update="1"] #update::after { content: ""; position: absolute; top: 8px; right: 8px; width: 8px; height: 8px;
+    border-radius: 50%; background: #ff453a; }
   .idle-only, .pass-only, .add-only { display: none; }
   body[data-state="idle"] .idle-only, body[data-state="pass"] .pass-only, body[data-state="add"] .add-only { display: block; }
 </style>
@@ -26,6 +30,7 @@
     <button id="freeze" class="idle-only accent" title="今の画面を止めて書く">静止<br>で書く</button>
     <button id="live" class="idle-only" title="動いている画面に重ねて書く">重ねて<br>書く</button>
     <button id="folder" class="idle-only" title="保存フォルダを開く">保存先</button>
+    <button id="update" class="idle-only" title="アップデートを確認">更新</button>
     <button id="quit" class="idle-only" title="アプリを終了">終了</button>
     <button id="back" class="pass-only accent" title="書き込みに戻る">書く</button>
     <button id="snap" class="pass-only" title="今の画面を止めて書く">静止</button>

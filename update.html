@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>ScreenInk のアップデート</title>
+<style>
+  * { box-sizing: border-box; -webkit-user-select: none; user-select: none; }
+  html, body { margin: 0; height: 100%; background: #18181b; color: #f4f4f5;
+    font-family: "Yu Gothic UI", "Meiryo UI", "Segoe UI", sans-serif; }
+  body { display: flex; flex-direction: column; padding: 20px 22px 18px; gap: 10px; }
+  h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  #ver { font-size: 12px; color: #a1a1aa; }
+  #msg { flex: 1; margin: 6px 0 0; font-size: 14px; line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
+  #bar { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.14); overflow: hidden; visibility: hidden; }
+  #bar.show { visibility: visible; }
+  #fill { display: block; height: 100%; width: 0; background: #ff453a; transition: width 0.2s; }
+  #btns { display: flex; justify-content: flex-end; gap: 8px; }
+  button { appearance: none; border: 0; background: rgba(255, 255, 255, 0.12); color: inherit; font: inherit;
+    font-size: 13px; height: 40px; padding: 0 16px; border-radius: 10px; cursor: pointer; }
+  button:hover { background: rgba(255, 255, 255, 0.2); }
+  button.accent { background: #ff453a; color: #fff; }
+  button[hidden] { display: none; }
+</style>
+</head>
+<body>
+  <div>
+    <h1>ScreenInk</h1>
+    <div id="ver"></div>
+  </div>
+  <p id="msg"></p>
+  <div id="bar"><i id="fill"></i></div>
+  <div id="btns">
+    <button id="check">アップデートを確認</button>
+    <button id="download" class="accent">ダウンロード</button>
+    <button id="install" class="accent">再起動して更新</button>
+    <button id="close">閉じる</button>
+  </div>
+  <script src="update.js"></script>
+</body>
+</html>

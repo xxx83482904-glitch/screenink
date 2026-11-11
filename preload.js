@@ -22,4 +22,12 @@ contextBridge.exposeInMainWorld('api', {
   quit: () => ipcRenderer.send('quit-app'),
   addShoot: () => ipcRenderer.send('add-shoot'),
   addCancel: () => ipcRenderer.send('add-cancel'),
+  onLauncherUpdate: (cb) => ipcRenderer.on('launcher-update', (_e, on) => cb(on)),
+  // update
+  updateOpen: () => ipcRenderer.send('update-open'),
+  updateCheck: () => ipcRenderer.send('update-check'),
+  updateDownload: () => ipcRenderer.send('update-download'),
+  updateInstall: () => ipcRenderer.send('update-install'),
+  updateGet: () => ipcRenderer.invoke('update-get'),
+  onUpdateState: (cb) => ipcRenderer.on('update-state', (_e, s) => cb(s)),
 });

@@ -47,6 +47,7 @@ function init() {
   globalShortcut.register(KEYS.pass, () => { if (mode === 'live') setPass(!passthrough); });
   globalShortcut.register(KEYS.close, () => closeOverlay());
   showLauncher('idle');
+  initUpdater();
 }
 
 app.on('before-quit', () => { quitting = true; });
@@ -69,7 +70,7 @@ function createOverlay() {
 
 function createLauncher() {
   launcher = new BrowserWindow({
-    width: 64, height: 252, show: false, frame: false, transparent: true,
+    width: 64, height: 304, show: false, frame: false, transparent: true,
     backgroundColor: '#00000000', resizable: false, minimizable: false,
     maximizable: false, fullscreenable: false, skipTaskbar: true, hasShadow: false,
     alwaysOnTop: true, focusable: false,
@@ -104,6 +105,9 @@ function createTray() {
     { label: `画面に重ねて書く (${KEYS.live.replace('Control', 'Ctrl')})`, click: () => startLive() },
     { type: 'separator' },
     { label: '保存フォルダを開く', click: openFolder },
+    { type: 'separator' },
+    { label: `バージョン ${app.getVersion()}`, enabled: false },
+    { label: 'アップデートを確認…', click: () => openUpdateWindow(true) },
     { type: 'separator' },
     { label: '終了', click: () => app.quit() },
   ]);
@@ -258,6 +262,77 @@ function openFolder() {
   fs.mkdirSync(saveDir(), { recursive: true });
   shell.openPath(saveDir());
 }
+
+// ---------- update ----------
+// GitHub Releases から更新する（electron-updater）。起動時に自動で確認し、新しい版があれば知らせる。
+// ダウンロードは利用者が押してから始め、終わったら「再起動して更新」できる（押さなくても次の終了時に更新される）。
+
+let updater = null;
+let updateWin = null;
+let silentCheck = false;
+// state: 'idle' | 'dev' | 'checking' | 'none' | 'available' | 'downloading' | 'ready' | 'error'
+const upd = { state: 'idle', version: null, percent: 0, message: '' };
+const updState = () => ({ ...upd, current: app.getVersion() });
+
+function setUpd(patch) {
+  Object.assign(upd, patch);
+  if (updateWin && !updateWin.isDestroyed()) updateWin.webContents.send('update-state', updState());
+  if (launcher && !launcher.isDestroyed()) launcher.webContents.send('launcher-update', upd.state === 'available' || upd.state === 'ready');
+}
+
+function updateError(err) {
+  const first = String((err && err.message) || err).split('\n')[0].slice(0, 200);
+  const hint = /404|Not Found|406/.test(first) ? '\n（リリースが見つかりません。リポジトリが public か、Release が公開済みか確認してください）' : '';
+  return first + hint;
+}
+
+function initUpdater() {
+  if (!app.isPackaged) { upd.state = 'dev'; return; } // 開発実行では更新元の設定が無い
+  updater = require('electron-updater').autoUpdater;
+  updater.autoDownload = false;
+  updater.autoInstallOnAppQuit = true;
+  updater.on('checking-for-update', () => setUpd({ state: 'checking' }));
+  updater.on('update-available', (info) => {
+    setUpd({ state: 'available', version: info.version });
+    if (silentCheck && mode === 'hidden') openUpdateWindow(false); // 起動時の確認で見つかったら知らせる
+  });
+  updater.on('update-not-available', () => setUpd({ state: 'none' }));
+  updater.on('download-progress', (p) => setUpd({ state: 'downloading', percent: Math.round(p.percent) }));
+  updater.on('update-downloaded', (info) => setUpd({ state: 'ready', version: info.version }));
+  updater.on('error', (err) => setUpd({ state: 'error', message: updateError(err) }));
+  setTimeout(() => checkForUpdates(true), 5000);
+}
+
+function checkForUpdates(silent) {
+  if (!updater || ['checking', 'available', 'downloading', 'ready'].includes(upd.state)) return;
+  silentCheck = silent;
+  updater.checkForUpdates().catch(() => { /* 'error' イベントで受ける */ });
+}
+
+function openUpdateWindow(check) {
+  if (check) checkForUpdates(false);
+  if (updateWin && !updateWin.isDestroyed()) { updateWin.show(); updateWin.focus(); return; }
+  updateWin = new BrowserWindow({
+    width: 420, height: 240, useContentSize: true, resizable: false, minimizable: false, maximizable: false,
+    fullscreenable: false, alwaysOnTop: true, backgroundColor: '#18181b', title: 'ScreenInk のアップデート',
+    icon: path.join(__dirname, 'assets', 'icon.png'),
+    webPreferences: { preload, contextIsolation: true },
+  });
+  updateWin.removeMenu();
+  updateWin.setAlwaysOnTop(true, 'screen-saver');
+  updateWin.loadFile(path.join(__dirname, 'update.html'));
+  updateWin.on('closed', () => { updateWin = null; });
+}
+
+ipcMain.on('update-open', () => openUpdateWindow(true));
+ipcMain.on('update-check', () => checkForUpdates(false));
+ipcMain.on('update-download', () => {
+  if (!updater || upd.state !== 'available') return;
+  setUpd({ state: 'downloading', percent: 0 });
+  updater.downloadUpdate().catch(() => { /* 'error' イベントで受ける */ });
+});
+ipcMain.on('update-install', () => { if (updater && upd.state === 'ready') updater.quitAndInstall(true, true); });
+ipcMain.handle('update-get', () => updState());
 
 // ---------- ipc ----------
 

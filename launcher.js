@@ -4,6 +4,8 @@ on('freeze', () => api.startFreeze());
 on('live', () => api.startLive());
 on('folder', () => api.openFolder());
 on('quit', () => api.quit());
+on('update', () => api.updateOpen());
+api.onLauncherUpdate((has) => { document.body.dataset.update = has ? '1' : '0'; });
 on('back', () => api.startLive());          // 操作モード中は「書く」に戻る
 on('snap', () => api.switchMode('freeze')); // 書き込みを残したまま静止へ
 on('close', () => api.close());
