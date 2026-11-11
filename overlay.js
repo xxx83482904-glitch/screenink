@@ -36,6 +36,8 @@ const state = { tool: 'pen', color: '#ff3b30', size: 4 };
 let sel = new Set();   // 選択中のものの id
 let xform = null;      // 選択したものを移動/拡大縮小している最中
 let lasso = null;      // 選択ツールで囲んでいる最中 {pts}（ワールド座標）
+let pendingLasso = null; // ペンで囲んで選択したときの輪。「線として残す」で普通の線に戻せる
+let clip = null;       // コピーしたもの {items, box, w, h}
 
 const toWorld = (cx, cy) => ({ x: (cx - view.tx) / view.s, y: (cy - view.ty) / view.s });
 const clampScale = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
@@ -94,12 +96,12 @@ function clearCtx(ctx) {
   ctx.restore();
 }
 
-function paintImages(ctx, t, outline) {
+function paintImages(ctx, t, outline, list = items) {
   setT(ctx, t);
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
   ctx.imageSmoothingQuality = 'high';
-  for (const it of items) {
+  for (const it of list) {
     if (it.type !== 'image') continue;
     ctx.drawImage(it.img, it.x, it.y, it.w, it.h);
     if (outline) { // 白紙の上で画像の端が分かるように細い線
@@ -292,6 +294,8 @@ const SEL_PAD = 6; // 枠と中身のすき間（画面 px）
 
 function setSel(ids) {
   sel = new Set(ids);
+  pendingLasso = null;
+  $('selKeep').hidden = true;
   requestDraw();
 }
 
@@ -301,7 +305,7 @@ function clearSel() {
 
 function pruneSel() {
   const alive = new Set(visibleItems().map((it) => it.id));
-  sel = new Set([...sel].filter((id) => alive.has(id)));
+  setSel([...sel].filter((id) => alive.has(id)));
 }
 
 // 選択枠（画面座標）
@@ -366,9 +370,49 @@ function endXform(cancel) {
 function deleteSel() {
   if (!sel.size || xform) return;
   items = items.filter((it) => !sel.has(it.id));
-  sel = new Set();
+  setSel([]);
   commit();
-  requestDraw();
+}
+
+// 囲んで選択したときの輪を、普通の線として残す（丸を書きたかった場合）
+function keepLasso() {
+  const s = pendingLasso;
+  if (!s) return;
+  setSel([]);
+  s.t = performance.now();
+  items = [...items, s];
+  commit();
+}
+
+// 選択したものをコピーする。アプリ内には「もの」のまま、クリップボードには画像として入れる
+async function copySel() {
+  if (!sel.size || busy()) return;
+  const list = items.filter((it) => sel.has(it.id));
+  const b = G.unionBox(list.map(G.itemBox));
+  const m = 8;
+  const box = { x: b.x - m, y: b.y - m, w: b.w + m * 2, h: b.h + m * 2 };
+  const out = renderBox(box, exportScale(box, list), list);
+  clip = { items: list, box: b, w: out.width, h: out.height };
+  const copied = await api.copyPng(out.toDataURL('image/png'));
+  toast(copied ? 'コピーしました' : 'コピーしました（このアプリ内でのみ貼り付けできます）');
+}
+
+// コピーしたものを、今見えている範囲の中央に貼り付ける
+function pasteClip() {
+  const c = toWorld(window.innerWidth / 2, window.innerHeight / 2);
+  let dx = c.x - (clip.box.x + clip.box.w / 2), dy = c.y - (clip.box.y + clip.box.h / 2);
+  if (Math.hypot(dx, dy) * view.s < 4) { dx = 24 / view.s; dy = 24 / view.s; } // 同じ場所なら少しずらす
+  const now = performance.now();
+  const added = clip.items.map((it) => {
+    const n = G.transformItem(it, { s: 1, ax: 0, ay: 0, dx, dy });
+    n.id = nextId++;
+    n.t = now;
+    delete n.base;
+    return n;
+  });
+  items = [...items, ...added];
+  commit();
+  setSel(added.map((it) => it.id));
 }
 
 // 指のタップやペンの長押しで選べるもの。撮った画面そのもの（base）は誤操作を避けるため選択ツールでだけ選べる
@@ -459,6 +503,27 @@ function eraseSeg(a, b) {
   if (changed) items = out;
 }
 
+const HOLD_MS = 500;        // ペンの長押しで選択するまでの時間
+const LASSO_MIN_AGE = 1000; // 囲んで選択できるのは、書いてからこの時間が過ぎたものだけ
+const SCRATCH_SPEED = 0.5;  // スクラッチアウトとみなす速さ（画面 px / ms）。ゆっくり書いた線は消さない
+let holdTimer = 0;
+let strokeT0 = 0;
+
+// ペンを動かさずに押し続けたら、その下の線や画像を選択する。そのまま動かせば移動になる
+function startHold(id, cx, cy) {
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => {
+    if (!cur || activeId !== id || !isTap(cur)) return;
+    const wp = toWorld(cx, cy);
+    const it = G.hitItem(visibleItems(), wp, 8 / view.s, gestureSelectable);
+    if (!it) return;
+    cur = null;
+    drawInk();
+    setSel([it.id]);
+    startXform(id, { kind: 'move' }, wp);
+  }, HOLD_MS);
+}
+
 let touchTap = null;      // 指1本のタップ判定 {id, x, y, t, moved}
 let swallowTap = false;   // 選択を外すためのタップを、点として残さない
 
@@ -540,7 +605,9 @@ function onDown(e) {
   }
   // 太さは画面上で一定。ワールド座標では表示倍率で割った値になる
   cur = { id: nextId++, type: 'stroke', tool, color: state.color, size: state.size / view.s, pts: [point(e)] };
+  strokeT0 = now;
   if (tool === 'hl') clearCtx(lctx);
+  if (e.pointerType === 'pen') startHold(e.pointerId, e.clientX, e.clientY);
 }
 
 function onMove(e) {
@@ -613,6 +680,7 @@ function onUp(e) {
   if (e.pointerId !== activeId) return;
   if (e.pointerType === 'pen') lastPen = performance.now();
   activeId = null;
+  clearTimeout(holdTimer);
   if (xform) { endXform(cancelled); return; }
   if (lasso) {
     const l = lasso;
@@ -642,8 +710,35 @@ function onUp(e) {
   requestDraw();
 }
 
-// 書き終えた線を確定する
+// 書き終えた線を確定する。ペンで書いた線は、先にインクジェスチャーかどうかを調べる
+//  - ぐしゃぐしゃ（スクラッチアウト）: 下にある線や画像を消す
+//  - 囲む（投げ縄）: 中にあるものを選択する
+// どちらも対象が無ければ普通の線として残す。撮った画面そのものは対象にしない
 function finishStroke(s) {
+  const t1 = performance.now();
+  if (s.tool === 'pen') {
+    const px = 1 / view.s;
+    const speed = G.pathLength(s.pts) * view.s / Math.max(1, t1 - strokeT0);
+    if (G.isScratch(s.pts, px)) {
+      const hit = speed >= SCRATCH_SPEED
+        ? new Set(G.scratchTargets(visibleItems(), s, px, gestureSelectable).map((it) => it.id)) : new Set();
+      if (hit.size) {
+        items = items.filter((it) => !hit.has(it.id));
+        commit();
+        return;
+      }
+    } else if (G.isLoop(s.pts, px)) {
+      const old = (it) => gestureSelectable(it) && it.t <= strokeT0 - LASSO_MIN_AGE;
+      const ids = G.lassoTargets(visibleItems(), s.pts, 0.8, old).map((it) => it.id);
+      if (ids.length) {
+        setSel(ids);
+        pendingLasso = s;
+        $('selKeep').hidden = false;
+        return;
+      }
+    }
+  }
+  s.t = t1;
   items = [...items, s];
   commit();
 }
@@ -672,6 +767,7 @@ window.addEventListener('wheel', (e) => {
 const busy = () => !!(cur || erasing || xform || lasso);
 
 function undo() {
+  if (pendingLasso && !busy()) { keepLasso(); return; } // 囲んで選択した直後の「戻す」は、輪を線として残す
   if (busy() || hi === 0) return;
   items = history[--hi];
   pruneSel();
@@ -705,15 +801,15 @@ function loadImg(url) {
 }
 
 // 「全体」を保存するときの解像度。画像の元の画素を落とさない倍率にする
-function exportScale(box) {
+function exportScale(box, list = items) {
   let k = dpr;
-  for (const it of items) if (it.type === 'image') k = Math.max(k, it.img.naturalWidth / it.w);
+  for (const it of list) if (it.type === 'image') k = Math.max(k, it.img.naturalWidth / it.w);
   k = Math.min(4, Math.max(1, k));
   return Math.min(k, Math.sqrt(MAX_EXPORT_PIXELS / (box.w * box.h)));
 }
 
 // ワールド座標の範囲 box を倍率 k で1枚の画像にする
-function renderBox(box, k) {
+function renderBox(box, k, list = items) {
   const out = document.createElement('canvas');
   out.width = Math.max(1, Math.round(box.w * k));
   out.height = Math.max(1, Math.round(box.h * k));
@@ -721,14 +817,14 @@ function renderBox(box, k) {
   const t = { k, ox: -box.x * k, oy: -box.y * k };
   x.fillStyle = '#fff';
   x.fillRect(0, 0, out.width, out.height);
-  paintImages(x, t, false);
-  paintStrokes(x, strokesOf(items), t);
+  paintImages(x, t, false, list);
+  paintStrokes(x, strokesOf(list), t);
   return out;
 }
 
 // 画像をキャンバスに置いて選択状態にする
 function addImage(img, x, y, w, h) {
-  const it = { id: nextId++, type: 'image', img, x, y, w, h };
+  const it = { id: nextId++, type: 'image', img, x, y, w, h, t: performance.now() };
   items = [...items, it];
   commit();
   setSel([it.id]);
@@ -743,8 +839,10 @@ async function paste() {
   pasting = true;
   try {
     const url = await api.readClipboardImage();
-    if (!url) { toast('クリップボードに画像がありません'); return; }
-    const img = await loadImg(url);
+    const img = url ? await loadImg(url) : null;
+    // クリップボードの中身がこのアプリでコピーした画像のままなら、線は線のまま貼り付ける
+    if (clip && (!img || (img.naturalWidth === clip.w && img.naturalHeight === clip.h))) { pasteClip(); return; }
+    if (!img) { toast('クリップボードに画像がありません'); return; }
     // 100% 表示で元の大きさ。見えている範囲の 80% を超えるなら収まるように縮める
     let w = img.naturalWidth / dpr, h = img.naturalHeight / dpr;
     const vw = window.innerWidth / view.s, vh = window.innerHeight / view.s;
@@ -833,13 +931,17 @@ function updateButtons() {
   document.querySelectorAll('[data-color]').forEach((b) => b.classList.toggle('on', b.dataset.color === state.color));
   document.querySelectorAll('[data-size]').forEach((b) => b.classList.toggle('on', Number(b.dataset.size) === state.size));
   live.style.cursor = state.tool === 'select' ? 'default' : 'crosshair';
-  $('undo').disabled = hi === 0;
+  $('undo').disabled = hi === 0 && !pendingLasso;
   $('redo').disabled = hi >= history.length - 1;
 }
 
 $('selMenu').addEventListener('click', (e) => {
   const b = e.target.closest('button');
-  if (b && b.id === 'selDelete') deleteSel();
+  if (!b) return;
+  if (b.id === 'selDelete') deleteSel();
+  else if (b.id === 'selCopy') copySel();
+  else if (b.id === 'selKeep') keepLasso();
+  updateButtons();
 });
 
 $('bar').addEventListener('click', (e) => {
@@ -873,6 +975,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { if (sel.size) clearSel(); else api.close(); }
   else if (e.key === 'Delete' || e.key === 'Backspace') deleteSel();
   else if (e.ctrlKey && k === 'v') paste();
+  else if (e.ctrlKey && k === 'c') copySel();
   else if (e.ctrlKey && k === 'z' && !e.shiftKey) undo();
   else if (e.ctrlKey && (k === 'y' || (k === 'z' && e.shiftKey))) redo();
   else if (e.ctrlKey && k === 's') { e.preventDefault(); save(e.shiftKey && mode === 'freeze' ? 'all' : 'view'); }
@@ -900,7 +1003,8 @@ api.onMode(async ({ mode: m, image, size, keepInk }) => {
   pan = null;
   xform = null;
   lasso = null;
-  sel = new Set();
+  clearTimeout(holdTimer);
+  setSel([]);
   endTouches();
   hideSaveMenu();
   view.s = 1; view.tx = 0; view.ty = 0; // モードを切り替えたら等倍に戻す

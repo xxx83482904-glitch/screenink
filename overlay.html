@@ -31,6 +31,7 @@
   button:hover { background: rgba(255, 255, 255, 0.1); }
   button.on { background: #f4f4f5; color: #18181b; }
   button:disabled { opacity: 0.35; cursor: default; }
+  button[hidden] { display: none; }
   .sw { min-width: 36px; width: 36px; padding: 0; display: grid; place-items: center; }
   .sw i { width: 20px; height: 20px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.5); }
   .sw.on { background: rgba(255, 255, 255, 0.22); }
@@ -101,7 +102,9 @@
   </div>
 
   <div id="selMenu" class="menu float">
+    <button id="selCopy" title="Ctrl+C">コピー</button>
     <button id="selDelete" title="Delete">削除</button>
+    <button id="selKeep" title="囲んだ線を、選択ではなく線として残す" hidden>線として残す</button>
   </div>
 
   <div id="toast"></div>

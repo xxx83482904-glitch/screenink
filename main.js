@@ -288,6 +288,19 @@ ipcMain.on('quit-app', () => app.quit());
 
 ipcMain.handle('grab-screen', async () => (await captureClean(display)).toDataURL());
 
+// PNG をクリップボードに入れる。Electron 45 のクリップボードは非同期API（writeImage は廃止）
+async function copyPng(png) {
+  try {
+    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
+    return true;
+  } catch (err) {
+    console.error(err);
+    return false;
+  }
+}
+
+ipcMain.handle('copy-png', (_e, dataUrl) => copyPng(nativeImage.createFromDataURL(dataUrl).toPNG()));
+
 ipcMain.handle('save-png', async (_e, dataUrl) => {
   const png = nativeImage.createFromDataURL(dataUrl).toPNG();
   const t = new Date();
@@ -297,13 +310,5 @@ ipcMain.handle('save-png', async (_e, dataUrl) => {
   fs.mkdirSync(saveDir(), { recursive: true });
   const file = path.join(saveDir(), name);
   await fs.promises.writeFile(file, png);
-  // Electron 45 のクリップボードは非同期API（writeImage は廃止）。コピーに失敗してもファイルは残す
-  let copied = true;
-  try {
-    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
-  } catch (err) {
-    console.error(err);
-    copied = false;
-  }
-  return { file, copied };
+  return { file, copied: await copyPng(png) }; // コピーに失敗してもファイルは残す
 });

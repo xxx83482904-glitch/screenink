@@ -167,7 +167,94 @@
     return n;
   }
 
+  // ---------- インクジェスチャーの判定 ----------
+  // px = 画面上の 1px にあたるワールド座標の長さ（1 / 表示倍率）。しきい値は画面上の大きさで決める。
+  // どれも「下に消す/囲む対象があるとき」だけ発動させる前提で、形の判定は控えめにしてある。
+
+  // 値の列が向きを変えた回数。min 以上進んでから折り返したものだけ数える
+  function reversals(vals, min) {
+    let dir = 0, ext = vals[0], n = 0;
+    for (const v of vals) {
+      if (dir === 0) {
+        if (Math.abs(v - ext) >= min) { dir = v > ext ? 1 : -1; ext = v; }
+      } else if ((v - ext) * dir > 0) {
+        ext = v;
+      } else if ((ext - v) * dir >= min) {
+        n++; dir = -dir; ext = v;
+      }
+    }
+    return n;
+  }
+
+  const range = (vals) => Math.max(...vals) - Math.min(...vals);
+
+  // 点の広がりが一番大きい向き（主軸）
+  function principalAxis(pts) {
+    let mx = 0, my = 0;
+    for (const p of pts) { mx += p.x; my += p.y; }
+    mx /= pts.length; my /= pts.length;
+    let sxx = 0, syy = 0, sxy = 0;
+    for (const p of pts) { sxx += (p.x - mx) ** 2; syy += (p.y - my) ** 2; sxy += (p.x - mx) * (p.y - my); }
+    const a = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    return { ux: Math.cos(a), uy: Math.sin(a) };
+  }
+
+  // ぐしゃぐしゃ（スクラッチアウト）の形か。
+  // 主軸に沿って2往復半以上している、または主軸と直角に細かく3往復半以上しているもの
+  function isScratch(pts, px) {
+    if (pts.length < 8) return false;
+    const { ux, uy } = principalAxis(pts);
+    const major = pts.map((p) => p.x * ux + p.y * uy);
+    const minor = pts.map((p) => -p.x * uy + p.y * ux);
+    const eM = range(major), em = range(minor);
+    if (eM < 12 * px) return false;
+    if (reversals(major, Math.max(8 * px, 0.4 * eM)) >= 4) return true;
+    return em >= 10 * px && reversals(minor, Math.max(6 * px, 0.5 * em)) >= 6;
+  }
+
+  function pointsBox(pts) {
+    return unionBox(pts.map((p) => ({ x: p.x, y: p.y, w: 0, h: 0 })));
+  }
+
+  // ぐしゃぐしゃの下にあって消す対象になるもの。
+  // 線: 点の6割以上がぐしゃぐしゃの範囲に入り、実際に触れている。画像: 面積の6割以上が覆われている
+  function scratchTargets(items, s, px, accept) {
+    const box = pointsBox(s.pts);
+    return items.filter((it) => {
+      if (accept && !accept(it)) return false;
+      if (it.type === 'image') {
+        const w = Math.min(it.x + it.w, box.x + box.w) - Math.max(it.x, box.x);
+        const h = Math.min(it.y + it.h, box.y + box.h) - Math.max(it.y, box.y);
+        return w > 0 && h > 0 && (w * h) / (it.w * it.h) >= 0.6;
+      }
+      if (!boxesOverlap(strokeBox(it), box)) return false;
+      const inside = it.pts.filter((p) => inBox(box, p));
+      if (inside.length / it.pts.length < 0.6) return false;
+      const tol = widthOf(it, 0.5) / 2 + 4 * px;
+      return inside.some((p) => distToStroke(s, p) <= tol);
+    });
+  }
+
+  // 閉じた輪（投げ縄）の形か。始点と終点の近くがつながり、つぶれておらず、ぐしゃぐしゃでもないもの
+  function isLoop(pts, px) {
+    const n = pts.length;
+    if (n < 8) return false;
+    const L = pathLength(pts);
+    if (L < 120 * px) return false;
+    const k = Math.max(1, Math.floor(n * 0.15));
+    let gap = Infinity;
+    for (let i = 0; i < k; i++) {
+      for (let j = n - k; j < n; j++) gap = Math.min(gap, Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y));
+    }
+    if (gap > Math.max(14 * px, 0.05 * L)) return false;
+    let area = 0;
+    for (let i = 0, j = n - 1; i < n; j = i++) area += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
+    if (Math.abs(area) / 2 / (L * L) < 0.025) return false;
+    return !isScratch(pts, px);
+  }
+
   return {
+    reversals, isScratch, scratchTargets, isLoop, pointsBox,
     widthOf, strokeBox, itemBox, unionBox, boxesOverlap, distSegPoint, densify, eraseStroke,
     distToStroke, inBox, hitItem, pointInPoly, insideFraction, lassoTargets, transformItem, pathLength,
   };

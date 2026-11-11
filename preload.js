@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('api', {
   switchMode: (mode) => ipcRenderer.send('switch-mode', mode),
   setPass: (on) => ipcRenderer.send('set-pass', on),
   close: () => ipcRenderer.send('close-overlay'),
+  copyPng: (dataUrl) => ipcRenderer.invoke('copy-png', dataUrl),
   readClipboardImage: () => ipcRenderer.invoke('read-clipboard-image'),
   addCapture: () => ipcRenderer.send('add-capture'),
   onAddImage: (cb) => ipcRenderer.on('add-image', (_e, payload) => cb(payload)),
