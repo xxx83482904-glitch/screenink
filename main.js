@@ -1,7 +1,7 @@
 // ScreenInk — 画面をキャプチャして、そのままペンで書き込むアプリ
 const {
   app, BrowserWindow, globalShortcut, desktopCapturer, screen, ipcMain,
-  Tray, Menu, nativeImage, clipboard, shell,
+  Tray, Menu, nativeImage, clipboard, ClipboardItem, shell,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -237,14 +237,21 @@ ipcMain.on('quit-app', () => app.quit());
 ipcMain.handle('grab-screen', async () => (await captureClean(display)).toDataURL());
 
 ipcMain.handle('save-png', async (_e, dataUrl) => {
-  const img = nativeImage.createFromDataURL(dataUrl);
-  clipboard.writeImage(img);
+  const png = nativeImage.createFromDataURL(dataUrl).toPNG();
   const t = new Date();
   const p2 = (n) => String(n).padStart(2, '0');
   const name = `ScreenInk_${t.getFullYear()}${p2(t.getMonth() + 1)}${p2(t.getDate())}_` +
     `${p2(t.getHours())}${p2(t.getMinutes())}${p2(t.getSeconds())}.png`;
   fs.mkdirSync(saveDir(), { recursive: true });
   const file = path.join(saveDir(), name);
-  await fs.promises.writeFile(file, img.toPNG());
-  return file;
+  await fs.promises.writeFile(file, png);
+  // Electron 45 のクリップボードは非同期API（writeImage は廃止）。コピーに失敗してもファイルは残す
+  let copied = true;
+  try {
+    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
+  } catch (err) {
+    console.error(err);
+    copied = false;
+  }
+  return { file, copied };
 });

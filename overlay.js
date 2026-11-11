@@ -232,8 +232,8 @@ async function save() {
     const x = out.getContext('2d');
     x.drawImage(base, 0, 0, out.width, out.height);
     x.drawImage(ink, 0, 0);
-    const file = await api.save(out.toDataURL('image/png'));
-    toast('保存してクリップボードにコピーしました　' + file);
+    const { file, copied } = await api.save(out.toDataURL('image/png'));
+    toast((copied ? '保存してクリップボードにコピーしました　' : '保存しました（コピーは失敗）　') + file);
   } catch (err) {
     toast('保存に失敗しました: ' + err.message);
   } finally {
