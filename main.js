@@ -13,6 +13,10 @@ const KEYS = {
   pass: 'Control+Alt+A',   // 書く ⇔ 下のアプリを操作 の切り替え
   close: 'Control+Alt+X',  // 閉じる
 };
+// 色を変えない：撮った画像は「画面に出ていた値」そのもの。広色域の画面（Surface など）では、
+// Chromium が表示時にもう一度色変換をかけて色味がずれるので、画面を sRGB とみなして変換を止める。
+app.commandLine.appendSwitch('force-color-profile', 'srgb');
+
 const HIDE_WAIT_MS = 220; // 自分のウィンドウが画面から消えるのを待つ時間
 
 let overlay = null;

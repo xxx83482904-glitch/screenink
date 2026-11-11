@@ -29,6 +29,7 @@ app.whenReady().then(async () => {
     const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
     console.log(`display ${d.bounds.width}x${d.bounds.height} scale ${d.scaleFactor}`);
     ok(launcher.isVisible() && !overlay.isVisible() && (await lstate()) === 'idle', '起動直後はランチャーだけが出ている');
+    ok(/BT709/.test(d.colorSpace) && /SRGB/.test(d.colorSpace), '表示の色変換を止めている（撮った色がそのまま出る）', d.colorSpace);
 
     await lj('api.startFreeze()');
     await sleep(1800);
