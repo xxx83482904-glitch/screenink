@@ -68,9 +68,12 @@ function createOverlay() {
   overlay.on('close', (e) => { if (!quitting) { e.preventDefault(); closeOverlay(); } });
 }
 
+// ボタンの数に合わせた高さ（つまみ22 + ボタン48×n + すき間4×n + 余白16）
+const launcherHeight = (state) => 38 + 52 * (state === 'pass' ? 3 : 2);
+
 function createLauncher() {
   launcher = new BrowserWindow({
-    width: 64, height: 304, show: false, frame: false, transparent: true,
+    width: 64, height: launcherHeight('idle'), show: false, frame: false, transparent: true,
     backgroundColor: '#00000000', resizable: false, minimizable: false,
     maximizable: false, fullscreenable: false, skipTaskbar: true, hasShadow: false,
     alwaysOnTop: true, focusable: false,
@@ -84,7 +87,8 @@ function createLauncher() {
 function showLauncher(state) {
   const d = (state !== 'idle' && display) || screen.getPrimaryDisplay();
   const wa = d.workArea;
-  const [w, h] = launcher.getSize();
+  const w = launcher.getSize()[0], h = launcherHeight(state);
+  if (launcher.getSize()[1] !== h) { const [x, y] = launcher.getPosition(); launcher.setBounds({ x, y, width: w, height: h }); }
   // 初回と、表示先ディスプレイが変わったときだけ右端中央へ。あとはユーザーが動かした位置のまま
   if (launcher._displayId !== d.id) {
     launcher.setPosition(wa.x + wa.width - w - 12, Math.round(wa.y + (wa.height - h) / 2));
