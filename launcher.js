@@ -1,0 +1,10 @@
+/* global api */
+const on = (id, fn) => document.getElementById(id).addEventListener('click', fn);
+on('freeze', () => api.startFreeze());
+on('live', () => api.startLive());
+on('folder', () => api.openFolder());
+on('quit', () => api.quit());
+on('back', () => api.startLive());          // 操作モード中は「書く」に戻る
+on('snap', () => api.switchMode('freeze')); // 書き込みを残したまま静止へ
+on('close', () => api.close());
+api.onLauncherState((s) => { document.body.dataset.state = s; });

@@ -1,0 +1,14 @@
+{
+  "name": "screenink",
+  "productName": "ScreenInk",
+  "version": "0.1.0",
+  "description": "Capture the screen and draw on it with a pen",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "npx --yes @electron/packager . ScreenInk --platform=win32 --out=dist --overwrite --icon=assets/icon.png"
+  },
+  "devDependencies": {
+    "electron": "^45.3.0"
+  }
+}

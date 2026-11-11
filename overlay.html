@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'">
+<title>ScreenInk</title>
+<style>
+  * { box-sizing: border-box; -webkit-user-select: none; user-select: none; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: transparent;
+    font-family: "Yu Gothic UI", "Meiryo UI", "Segoe UI", sans-serif; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #bg { pointer-events: none; }
+  #ink { pointer-events: none; }
+  #live { opacity: 0.4; touch-action: none; cursor: crosshair; }
+
+  /* ライブで書き込み可能なときだけ、画面の縁に細い線を出す */
+  #frame { position: fixed; inset: 0; pointer-events: none; border: 3px solid transparent; }
+  body[data-mode="live"]:not([data-pass="1"]) #frame { border-color: rgba(255, 69, 58, 0.85); }
+
+  #bar { position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 4px; padding: 6px 8px;
+    background: rgba(24, 24, 27, 0.94); color: #f4f4f5; border-radius: 16px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); touch-action: none; white-space: nowrap; }
+  body[data-pass="1"] #bar, body[data-mode="hidden"] #bar { display: none; }
+  #bar.bottom { top: auto; bottom: 14px; }
+  .sep { width: 1px; height: 28px; background: rgba(255, 255, 255, 0.16); margin: 0 4px; }
+  button { appearance: none; border: 0; background: transparent; color: inherit; font: inherit;
+    font-size: 13px; min-width: 44px; height: 44px; padding: 0 10px; border-radius: 10px; cursor: pointer; }
+  button:hover { background: rgba(255, 255, 255, 0.1); }
+  button.on { background: #f4f4f5; color: #18181b; }
+  button:disabled { opacity: 0.35; cursor: default; }
+  .sw { min-width: 36px; width: 36px; padding: 0; display: grid; place-items: center; }
+  .sw i { width: 20px; height: 20px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.5); }
+  .sw.on { background: rgba(255, 255, 255, 0.22); }
+  .sz { min-width: 36px; width: 36px; padding: 0; display: grid; place-items: center; }
+  .sz i { background: currentColor; border-radius: 50%; }
+  body[data-mode="freeze"] .live-only { display: none; }
+  body[data-mode="live"] .freeze-only { display: none; }
+
+  #toast { position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%);
+    background: rgba(24, 24, 27, 0.94); color: #fff; padding: 10px 18px; border-radius: 12px;
+    font-size: 13px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body data-mode="hidden">
+  <canvas id="bg"></canvas>
+  <canvas id="ink"></canvas>
+  <canvas id="live"></canvas>
+  <div id="frame"></div>
+
+  <div id="bar">
+    <button data-tool="pen" class="on">ペン</button>
+    <button data-tool="hl">マーカー</button>
+    <button data-tool="eraser">消しゴム</button>
+    <div class="sep"></div>
+    <button class="sw on" data-color="#ff3b30" title="赤"><i style="background:#ff3b30"></i></button>
+    <button class="sw" data-color="#ffd60a" title="黄"><i style="background:#ffd60a"></i></button>
+    <button class="sw" data-color="#0a84ff" title="青"><i style="background:#0a84ff"></i></button>
+    <button class="sw" data-color="#30d158" title="緑"><i style="background:#30d158"></i></button>
+    <button class="sw" data-color="#111111" title="黒"><i style="background:#111111"></i></button>
+    <button class="sw" data-color="#ffffff" title="白"><i style="background:#ffffff"></i></button>
+    <div class="sep"></div>
+    <button class="sz" data-size="2" title="細"><i style="width:4px;height:4px"></i></button>
+    <button class="sz on" data-size="4" title="中"><i style="width:8px;height:8px"></i></button>
+    <button class="sz" data-size="8" title="太"><i style="width:14px;height:14px"></i></button>
+    <div class="sep"></div>
+    <button id="undo" title="Ctrl+Z">戻す</button>
+    <button id="redo" title="Ctrl+Y">進む</button>
+    <button id="clear">全消し</button>
+    <div class="sep"></div>
+    <button id="toFreeze" class="live-only" title="今の画面を止めて書く">静止</button>
+    <button id="toLive" class="freeze-only" title="動いている画面に重ねて書く">ライブ</button>
+    <button id="pass" class="live-only" title="下のアプリを操作する（書き込みは残る）">操作</button>
+    <button id="save" title="Ctrl+S">保存</button>
+    <button id="flip" title="ツールバーを上下に移動">⇅</button>
+    <button id="close" title="Esc">✕</button>
+  </div>
+
+  <div id="toast"></div>
+  <script src="overlay.js"></script>
+</body>
+</html>
