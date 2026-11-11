@@ -9,6 +9,7 @@ const G = Geom;
 
 const HL_ALPHA = 0.4;          // マーカーの濃さ（#live の CSS opacity と同じ値）
 const PALM_REJECT_MS = 1500;   // ペン使用中〜直後は指のタッチを無視
+const PALM_SIZE = 48;          // これより大きい接触（CSS px）はタップ選択に使わない
 const MIN_SCALE = 0.1, MAX_SCALE = 8;
 const MAX_EXPORT_PIXELS = 40e6;
 
@@ -545,7 +546,9 @@ function onDown(e) {
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     capture(e.pointerId);
     if (touches.size === 1) {
-      touchTap = { id: e.pointerId, x: e.clientX, y: e.clientY, t: now, moved: false };
+      // 接触面が大きいもの（手のひらや指の腹）はタップとして扱わない
+      const palmLike = Math.max(e.width || 0, e.height || 0) > PALM_SIZE;
+      touchTap = palmLike ? null : { id: e.pointerId, x: e.clientX, y: e.clientY, t: now, moved: false };
       const hit = selHit(e.clientX, e.clientY, 22);
       if (hit) startXform(e.pointerId, hit, wp);
     } else {
@@ -705,15 +708,21 @@ function onUp(e) {
   cur = null;
   const dropTap = swallowTap && isTap(s);
   swallowTap = false;
-  if (!cancelled && !dropTap) finishStroke(s);
-  drawInk(); // ベクターから描き直して確定（マーカーは半透明で焼き込まれる）
-  requestDraw();
+  const added = !cancelled && !dropTap && finishStroke(s);
+  if (added && s.tool !== 'hl') {
+    // 普通の線は書きながら描いてあるので、最後の端だけ足せばよい（全体は描き直さない）
+    prep(ictx, s, devT());
+    drawTail(ictx, s);
+    return;
+  }
+  requestDraw(); // マーカーの焼き込み、ジェスチャーで消えた/選択されたもの、取り消した線を反映
 }
 
 // 書き終えた線を確定する。ペンで書いた線は、先にインクジェスチャーかどうかを調べる
 //  - ぐしゃぐしゃ（スクラッチアウト）: 下にある線や画像を消す
 //  - 囲む（投げ縄）: 中にあるものを選択する
-// どちらも対象が無ければ普通の線として残す。撮った画面そのものは対象にしない
+// どちらも対象が無ければ普通の線として残す。撮った画面そのものは対象にしない。
+// 戻り値: 普通の線として追加したら true、ジェスチャーとして使ったら false
 function finishStroke(s) {
   const t1 = performance.now();
   if (s.tool === 'pen') {
@@ -725,7 +734,7 @@ function finishStroke(s) {
       if (hit.size) {
         items = items.filter((it) => !hit.has(it.id));
         commit();
-        return;
+        return false;
       }
     } else if (G.isLoop(s.pts, px)) {
       const old = (it) => gestureSelectable(it) && it.t <= strokeT0 - LASSO_MIN_AGE;
@@ -734,13 +743,14 @@ function finishStroke(s) {
         setSel(ids);
         pendingLasso = s;
         $('selKeep').hidden = false;
-        return;
+        return false;
       }
     }
   }
   s.t = t1;
   items = [...items, s];
   commit();
+  return true;
 }
 
 live.addEventListener('pointerdown', onDown);
