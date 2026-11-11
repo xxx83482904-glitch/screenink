@@ -1,7 +1,7 @@
 {
   "name": "screenink",
   "productName": "ScreenInk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Capture the screen and draw on it with a pen",
   "main": "main.js",
   "scripts": {
