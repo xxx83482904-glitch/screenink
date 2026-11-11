@@ -9,7 +9,7 @@
     "pack": "npx --yes @electron/packager . ScreenInk --platform=win32 --out=dist --overwrite --icon=assets/icon.png",
     "test": "node --test test/geom.test.js",
     "test:e2e": "electron test/e2e.js",
-    "test:main": "electron test/e2e-main.js"
+    "test:main": "electron test/main-e2e.js"
   },
   "devDependencies": {
     "electron": "^45.3.0"
