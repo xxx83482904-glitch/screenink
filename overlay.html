@@ -41,11 +41,12 @@
   #zoom { min-width: 54px; font-variant-numeric: tabular-nums; }
 
   .menu { position: absolute; top: calc(100% + 6px); display: none; flex-direction: column; gap: 2px;
-    padding: 6px; background: rgba(24, 24, 27, 0.94); border-radius: 12px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); }
+    padding: 6px; background: rgba(24, 24, 27, 0.94); color: #f4f4f5; border-radius: 12px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); }
   .menu.show { display: flex; }
   .menu button { text-align: left; padding: 0 14px; }
   #bar.bottom .menu { top: auto; bottom: calc(100% + 6px); }
-  #saveMenu { right: 96px; }
+  .menu.float { position: fixed; top: 0; left: 0; flex-direction: row; touch-action: none; }
+  body[data-pass="1"] .menu.float, body[data-mode="hidden"] .menu.float { display: none; }
 
   #toast { position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%);
     background: rgba(24, 24, 27, 0.94); color: #fff; padding: 10px 18px; border-radius: 12px;
@@ -64,6 +65,7 @@
     <button data-tool="pen" class="on">ペン</button>
     <button data-tool="hl">マーカー</button>
     <button data-tool="eraser">消しゴム</button>
+    <button data-tool="select" title="タップで選択、囲んで複数選択 (V)">選択</button>
     <div class="sep"></div>
     <button class="sw on" data-color="#ff3b30" title="赤"><i style="background:#ff3b30"></i></button>
     <button class="sw" data-color="#ffd60a" title="黄"><i style="background:#ffd60a"></i></button>
@@ -80,6 +82,9 @@
     <button id="redo" title="Ctrl+Y">進む</button>
     <button id="clear">全消し</button>
     <div class="sep"></div>
+    <button id="paste" class="freeze-only" title="クリップボードの画像を貼り付け (Ctrl+V)">貼付</button>
+    <button id="addCap" class="freeze-only" title="別の画面をもう1枚撮って並べる">＋撮影</button>
+    <div class="sep freeze-only"></div>
     <button id="fit" class="freeze-only" title="書き込みと画像の全体を表示 (Ctrl+1)">全体</button>
     <button id="zoom" class="freeze-only" title="100% に戻す (Ctrl+0)">100%</button>
     <div class="sep freeze-only"></div>
@@ -93,6 +98,10 @@
       <button id="saveView" title="Ctrl+S">今見えている範囲</button>
       <button id="saveAll" title="Ctrl+Shift+S">書き込みと画像の全体</button>
     </div>
+  </div>
+
+  <div id="selMenu" class="menu float">
+    <button id="selDelete" title="Delete">削除</button>
   </div>
 
   <div id="toast"></div>

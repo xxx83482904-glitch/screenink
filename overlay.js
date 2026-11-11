@@ -33,6 +33,10 @@ let activeId = null;   // 書く/消すに使っているポインター
 let lastPen = -1e9;
 const state = { tool: 'pen', color: '#ff3b30', size: 4 };
 
+let sel = new Set();   // 選択中のものの id
+let xform = null;      // 選択したものを移動/拡大縮小している最中
+let lasso = null;      // 選択ツールで囲んでいる最中 {pts}（ワールド座標）
+
 const toWorld = (cx, cy) => ({ x: (cx - view.tx) / view.s, y: (cy - view.ty) / view.s });
 const clampScale = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
 const strokesOf = (list) => list.filter((it) => it.type === 'stroke');
@@ -195,16 +199,46 @@ function drawInk() {
   if (cur) drawStroke(cur.tool === 'hl' ? lctx : ictx, cur, t);
 }
 
+const SEL_COLOR = '#0a84ff';
+
 function drawUi() {
   clearCtx(uctx);
+  uctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (erasing && erasing.screen) {
-    uctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     uctx.beginPath();
     uctx.arc(erasing.screen.x, erasing.screen.y, state.size * 3, 0, Math.PI * 2);
     uctx.lineWidth = 1;
     uctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
     uctx.stroke();
   }
+  if (lasso && lasso.pts.length > 1) {
+    uctx.beginPath();
+    lasso.pts.forEach((p, i) => {
+      const x = p.x * view.s + view.tx, y = p.y * view.s + view.ty;
+      if (i) uctx.lineTo(x, y); else uctx.moveTo(x, y);
+    });
+    uctx.setLineDash([6, 4]);
+    uctx.lineWidth = 1.5;
+    uctx.strokeStyle = SEL_COLOR;
+    uctx.stroke();
+    uctx.setLineDash([]);
+  }
+  const r = selRect();
+  if (r) {
+    uctx.setLineDash([6, 4]);
+    uctx.lineWidth = 1.5;
+    uctx.strokeStyle = SEL_COLOR;
+    uctx.strokeRect(r.x, r.y, r.w, r.h);
+    uctx.setLineDash([]);
+    uctx.fillStyle = '#fff';
+    for (const c of selCorners(r)) {
+      uctx.beginPath();
+      uctx.rect(c.x - 6, c.y - 6, 12, 12);
+      uctx.fill();
+      uctx.stroke();
+    }
+  }
+  placeSelMenu(r);
 }
 
 function drawAll() {
@@ -251,8 +285,118 @@ function fitAll() {
   requestDraw();
 }
 
+// ---------- selection ----------
+// 選択したもの（線・画像）は、枠の中をドラッグで移動、四隅で拡大縮小、メニューかDeleteで削除できる。
+
+const SEL_PAD = 6; // 枠と中身のすき間（画面 px）
+
+function setSel(ids) {
+  sel = new Set(ids);
+  requestDraw();
+}
+
+function clearSel() {
+  if (sel.size) setSel([]);
+}
+
+function pruneSel() {
+  const alive = new Set(visibleItems().map((it) => it.id));
+  sel = new Set([...sel].filter((id) => alive.has(id)));
+}
+
+// 選択枠（画面座標）
+function selRect() {
+  if (!sel.size) return null;
+  const b = G.unionBox(items.filter((it) => sel.has(it.id)).map(G.itemBox));
+  if (!b) return null;
+  return { x: b.x * view.s + view.tx - SEL_PAD, y: b.y * view.s + view.ty - SEL_PAD, w: b.w * view.s + SEL_PAD * 2, h: b.h * view.s + SEL_PAD * 2 };
+}
+
+function selCorners(r) {
+  return [
+    { x: r.x, y: r.y, ox: r.x + r.w, oy: r.y + r.h },
+    { x: r.x + r.w, y: r.y, ox: r.x, oy: r.y + r.h },
+    { x: r.x, y: r.y + r.h, ox: r.x + r.w, oy: r.y },
+    { x: r.x + r.w, y: r.y + r.h, ox: r.x, oy: r.y },
+  ];
+}
+
+// 画面上の点が選択枠のどこに当たるか: 四隅 → {kind:'scale', anchor}、枠の中 → {kind:'move'}
+function selHit(cx, cy, tol) {
+  const r = selRect();
+  if (!r) return null;
+  for (const c of selCorners(r)) {
+    if (Math.hypot(cx - c.x, cy - c.y) <= tol) return { kind: 'scale', anchor: toWorld(c.ox, c.oy) };
+  }
+  if (cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h) return { kind: 'move' };
+  return null;
+}
+
+function startXform(id, hit, wp) {
+  xform = { id, kind: hit.kind, anchor: hit.anchor, start: wp, base: items, ids: new Set(sel), moved: false };
+  capture(id);
+}
+
+function updateXform(e) {
+  const wp = toWorld(e.clientX, e.clientY);
+  let f;
+  if (xform.kind === 'move') {
+    f = { s: 1, ax: 0, ay: 0, dx: wp.x - xform.start.x, dy: wp.y - xform.start.y };
+    if (!xform.moved && Math.hypot(f.dx, f.dy) * view.s < 3) return;
+  } else {
+    const a = xform.anchor;
+    const d0 = Math.hypot(xform.start.x - a.x, xform.start.y - a.y) || 1;
+    f = { s: Math.max(0.05, Math.hypot(wp.x - a.x, wp.y - a.y) / d0), ax: a.x, ay: a.y, dx: 0, dy: 0 };
+  }
+  xform.moved = true;
+  items = xform.base.map((it) => (xform.ids.has(it.id) ? G.transformItem(it, f) : it));
+  requestDraw();
+}
+
+// 戻り値: 実際に動かしたかどうか
+function endXform(cancel) {
+  const x = xform;
+  xform = null;
+  if (!x) return false;
+  if (cancel || !x.moved) items = x.base; else commit();
+  requestDraw();
+  return x.moved && !cancel;
+}
+
+function deleteSel() {
+  if (!sel.size || xform) return;
+  items = items.filter((it) => !sel.has(it.id));
+  sel = new Set();
+  commit();
+  requestDraw();
+}
+
+// 指のタップやペンの長押しで選べるもの。撮った画面そのもの（base）は誤操作を避けるため選択ツールでだけ選べる
+const gestureSelectable = (it) => !it.base;
+
+function selectAt(wp, tol, accept) {
+  const it = G.hitItem(visibleItems(), wp, tol, accept);
+  setSel(it ? [it.id] : []);
+  return it;
+}
+
+function placeSelMenu(r) {
+  const m = $('selMenu');
+  const show = !!r && !xform && !cur && !lasso;
+  m.classList.toggle('show', show);
+  if (!show) return;
+  const mw = m.offsetWidth, mh = m.offsetHeight;
+  let y = r.y - mh - 10;
+  if (y < 84) y = r.y + r.h + 10;
+  if (y + mh > window.innerHeight - 8) y = Math.max(84, window.innerHeight - mh - 8);
+  const x = Math.min(window.innerWidth - mw - 8, Math.max(8, r.x + r.w / 2 - mw / 2));
+  m.style.left = x + 'px';
+  m.style.top = y + 'px';
+}
+
 // ---------- pointer ----------
-// ペン = 常に書く。指 = 常に操作（2本指でピンチ/移動）。マウス = 書く（中ボタン or Space+ドラッグで移動）。
+// ペン = 常に書く。指 = 常に操作（2本指でピンチ/移動、タップで選択）。
+// マウス = 書く（中ボタン or Space+ドラッグで移動）。選択中は、枠の中や四隅をどの入力でも掴める。
 
 const touches = new Map(); // pointerId -> {x, y}
 let pinch = null;
@@ -275,6 +419,7 @@ function capture(id) {
 function endTouches() {
   touches.clear();
   pinch = null;
+  touchTap = null;
 }
 
 function twoTouches() {
@@ -314,18 +459,42 @@ function eraseSeg(a, b) {
   if (changed) items = out;
 }
 
+let touchTap = null;      // 指1本のタップ判定 {id, x, y, t, moved}
+let swallowTap = false;   // 選択を外すためのタップを、点として残さない
+
+const penEraser = (e) => e.pointerType === 'pen' && (e.button === 5 || !!(e.buttons & 32) || !!(e.buttons & 2));
+
+// ほとんど動いていないストローク（タップ）か
+function isTap(s) {
+  const b = G.unionBox(s.pts.map((p) => ({ x: p.x, y: p.y, w: 0, h: 0 })));
+  return Math.max(b.w, b.h) * view.s < 6;
+}
+
 function onDown(e) {
   const now = performance.now();
   hideSaveMenu();
+  const wp = toWorld(e.clientX, e.clientY);
   if (e.pointerType === 'touch') {
-    if (now - lastPen < PALM_REJECT_MS || cur || erasing) return; // 手のひら
+    if (now - lastPen < PALM_REJECT_MS || activeId !== null) return; // 手のひら / ペンやマウスで操作中
     e.preventDefault();
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     capture(e.pointerId);
-    if (touches.size === 2) startPinch();
+    if (touches.size === 1) {
+      touchTap = { id: e.pointerId, x: e.clientX, y: e.clientY, t: now, moved: false };
+      const hit = selHit(e.clientX, e.clientY, 22);
+      if (hit) startXform(e.pointerId, hit, wp);
+    } else {
+      touchTap = null;
+      endXform(true); // 2本目の指が来たら、選択の移動はやめてピンチにする
+      if (touches.size === 2) startPinch();
+    }
     return;
   }
-  if (e.pointerType === 'pen') { lastPen = now; endTouches(); }
+  if (e.pointerType === 'pen') {
+    lastPen = now;
+    if (xform && activeId === null) endXform(true); // 指で動かしている最中にペンが来た
+    endTouches();
+  }
   if (activeId !== null || pan) return;
   if (e.pointerType === 'mouse') {
     if (e.button === 1 || (e.button === 0 && spaceDown)) {
@@ -337,16 +506,35 @@ function onDown(e) {
   }
   e.preventDefault();
 
-  let tool = state.tool;
   // ペンの尻（消しゴム）側、またはサイドボタンを押しながら → 消しゴム
-  if (e.pointerType === 'pen' && (e.button === 5 || (e.buttons & 32) || (e.buttons & 2))) tool = 'eraser';
+  const tool = penEraser(e) ? 'eraser' : state.tool;
 
+  if (tool !== 'eraser') {
+    const hit = selHit(e.clientX, e.clientY, 14);
+    if (hit) { activeId = e.pointerId; startXform(e.pointerId, hit, wp); return; }
+  }
   activeId = e.pointerId;
   capture(e.pointerId);
+
+  if (tool === 'select') {
+    const add = e.shiftKey || e.ctrlKey;
+    const it = G.hitItem(visibleItems(), wp, 6 / view.s);
+    if (it && !it.base) {
+      setSel(add ? [...sel, it.id] : [it.id]);
+      startXform(e.pointerId, { kind: 'move' }, wp);
+    } else {
+      // 何もない所か、撮った画面の上。ドラッグなら囲み選択、動かさずに離せば撮った画面を選択
+      if (!add) clearSel();
+      lasso = { pts: [wp], add, click: it };
+    }
+    return;
+  }
+
+  swallowTap = sel.size > 0;
+  clearSel();
   if (tool === 'eraser') {
-    const w = toWorld(e.clientX, e.clientY);
-    erasing = { last: w, r: state.size * 3 / view.s, screen: { x: e.clientX, y: e.clientY } };
-    eraseSeg(w, w);
+    erasing = { last: wp, r: state.size * 3 / view.s, screen: { x: e.clientX, y: e.clientY } };
+    eraseSeg(wp, wp);
     requestDraw();
     return;
   }
@@ -360,7 +548,9 @@ function onMove(e) {
     const t = touches.get(e.pointerId);
     if (!t) return;
     t.x = e.clientX; t.y = e.clientY;
-    if (pinch && touches.size >= 2) updatePinch();
+    if (touchTap && touchTap.id === e.pointerId && Math.hypot(t.x - touchTap.x, t.y - touchTap.y) > 10) touchTap.moved = true;
+    if (xform && xform.id === e.pointerId) updateXform(e);
+    else if (pinch && touches.size >= 2) updatePinch();
     return;
   }
   if (e.pointerType === 'pen') lastPen = performance.now();
@@ -373,8 +563,14 @@ function onMove(e) {
   }
   if (e.pointerId !== activeId) return;
   e.preventDefault();
+  if (xform) { updateXform(e); return; }
   let evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
   if (!evs.length) evs = [e];
+  if (lasso) {
+    for (const ev of evs) lasso.pts.push(toWorld(ev.clientX, ev.clientY));
+    requestDraw();
+    return;
+  }
   if (erasing) {
     for (const ev of evs) {
       const w = toWorld(ev.clientX, ev.clientY);
@@ -399,15 +595,37 @@ function onMove(e) {
 }
 
 function onUp(e) {
+  const cancelled = e.type === 'pointercancel';
   if (e.pointerType === 'touch') {
+    if (!touches.has(e.pointerId)) return;
     touches.delete(e.pointerId);
     if (touches.size < 2) pinch = null;
+    const tap = touchTap && touchTap.id === e.pointerId ? touchTap : null;
+    if (tap) touchTap = null;
+    const moved = xform && xform.id === e.pointerId ? endXform(cancelled) : false;
+    // 指のタップ: 線や貼り付けた画像を選択。何もない所なら選択を外す
+    if (tap && !tap.moved && !moved && !cancelled && performance.now() - tap.t < 400) {
+      selectAt(toWorld(tap.x, tap.y), 14 / view.s, gestureSelectable);
+    }
     return;
   }
   if (pan && e.pointerId === pan.id) { pan = null; return; }
   if (e.pointerId !== activeId) return;
   if (e.pointerType === 'pen') lastPen = performance.now();
   activeId = null;
+  if (xform) { endXform(cancelled); return; }
+  if (lasso) {
+    const l = lasso;
+    lasso = null;
+    if (!cancelled && G.pathLength(l.pts) * view.s > 12) {
+      const ids = G.lassoTargets(visibleItems(), l.pts, 0.7).map((it) => it.id);
+      setSel(l.add ? [...sel, ...ids] : ids);
+    } else if (!cancelled && l.click) {
+      setSel(l.add ? [...sel, l.click.id] : [l.click.id]);
+    }
+    requestDraw();
+    return;
+  }
   if (erasing) {
     erasing = null;
     commit();
@@ -417,9 +635,17 @@ function onUp(e) {
   if (!cur) return;
   const s = cur;
   cur = null;
+  const dropTap = swallowTap && isTap(s);
+  swallowTap = false;
+  if (!cancelled && !dropTap) finishStroke(s);
+  drawInk(); // ベクターから描き直して確定（マーカーは半透明で焼き込まれる）
+  requestDraw();
+}
+
+// 書き終えた線を確定する
+function finishStroke(s) {
   items = [...items, s];
   commit();
-  drawInk(); // ベクターから描き直して確定（マーカーは半透明で焼き込まれる）
 }
 
 live.addEventListener('pointerdown', onDown);
@@ -443,23 +669,28 @@ window.addEventListener('wheel', (e) => {
 
 // ---------- actions ----------
 
+const busy = () => !!(cur || erasing || xform || lasso);
+
 function undo() {
-  if (cur || erasing || hi === 0) return;
+  if (busy() || hi === 0) return;
   items = history[--hi];
+  pruneSel();
   drawAll();
   updateButtons();
 }
 
 function redo() {
-  if (cur || erasing || hi >= history.length - 1) return;
+  if (busy() || hi >= history.length - 1) return;
   items = history[++hi];
+  pruneSel();
   drawAll();
   updateButtons();
 }
 
 function clearAll() {
-  if (cur || erasing || !items.some((it) => it.type === 'stroke')) return;
+  if (busy() || !items.some((it) => it.type === 'stroke')) return;
   items = items.filter((it) => it.type !== 'stroke');
+  pruneSel();
   commit();
   drawAll();
 }
@@ -495,11 +726,57 @@ function renderBox(box, k) {
   return out;
 }
 
+// 画像をキャンバスに置いて選択状態にする
+function addImage(img, x, y, w, h) {
+  const it = { id: nextId++, type: 'image', img, x, y, w, h };
+  items = [...items, it];
+  commit();
+  setSel([it.id]);
+  return it;
+}
+
+// クリップボードの画像を、今見えている範囲の中央に貼り付ける
+let pasting = false;
+async function paste() {
+  if (pasting || busy()) return;
+  if (mode !== 'freeze') { toast('貼り付けは「静止」モードで使えます'); return; }
+  pasting = true;
+  try {
+    const url = await api.readClipboardImage();
+    if (!url) { toast('クリップボードに画像がありません'); return; }
+    const img = await loadImg(url);
+    // 100% 表示で元の大きさ。見えている範囲の 80% を超えるなら収まるように縮める
+    let w = img.naturalWidth / dpr, h = img.naturalHeight / dpr;
+    const vw = window.innerWidth / view.s, vh = window.innerHeight / view.s;
+    const k = Math.min(1, vw * 0.8 / w, vh * 0.8 / h);
+    w *= k; h *= k;
+    const c = toWorld(window.innerWidth / 2, window.innerHeight / 2);
+    addImage(img, c.x - w / 2, c.y - h / 2, w, h);
+  } catch (err) {
+    toast('貼り付けに失敗しました: ' + err.message);
+  } finally {
+    pasting = false;
+  }
+}
+
+// 追加で撮った画面を、今ある画像の右隣に並べて全体を表示する
+api.onAddImage(async ({ image, size }) => {
+  if (mode !== 'freeze') return;
+  try {
+    const img = await loadImg(image);
+    const b = G.unionBox(items.filter((it) => it.type === 'image').map(G.itemBox));
+    addImage(img, b ? b.x + b.w + 40 : 0, b ? b.y : 0, size.w, size.h);
+    fitAll();
+  } catch (err) {
+    toast('キャプチャの追加に失敗しました: ' + err.message);
+  }
+});
+
 let saving = false;
 // kind: 'view' = 今見えている範囲、'all' = 書き込みと画像を含む全体
 async function save(kind) {
   hideSaveMenu();
-  if (saving || cur || erasing) return;
+  if (saving || busy()) return;
   saving = true;
   try {
     let out;
@@ -544,30 +821,45 @@ function toast(msg) {
 
 function hideSaveMenu() { $('saveMenu').classList.remove('show'); }
 
+// 保存メニューを「保存」ボタンの位置に出す（ツールバーが折り返していても合うように）
+function toggleSaveMenu() {
+  const m = $('saveMenu'), b = $('save');
+  m.style.left = b.offsetLeft + 'px';
+  m.classList.toggle('show');
+}
+
 function updateButtons() {
   document.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === state.tool));
   document.querySelectorAll('[data-color]').forEach((b) => b.classList.toggle('on', b.dataset.color === state.color));
   document.querySelectorAll('[data-size]').forEach((b) => b.classList.toggle('on', Number(b.dataset.size) === state.size));
+  live.style.cursor = state.tool === 'select' ? 'default' : 'crosshair';
   $('undo').disabled = hi === 0;
   $('redo').disabled = hi >= history.length - 1;
 }
+
+$('selMenu').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (b && b.id === 'selDelete') deleteSel();
+});
 
 $('bar').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.id !== 'save') hideSaveMenu();
-  if (b.dataset.tool) state.tool = b.dataset.tool;
+  if (b.dataset.tool) { state.tool = b.dataset.tool; if (state.tool !== 'select') clearSel(); }
   else if (b.dataset.color) { state.color = b.dataset.color; if (state.tool === 'eraser') state.tool = 'pen'; }
   else if (b.dataset.size) state.size = Number(b.dataset.size);
   else if (b.id === 'undo') undo();
   else if (b.id === 'redo') redo();
   else if (b.id === 'clear') clearAll();
+  else if (b.id === 'paste') paste();
+  else if (b.id === 'addCap') api.addCapture();
   else if (b.id === 'fit') fitAll();
   else if (b.id === 'zoom') resetView();
   else if (b.id === 'toFreeze') api.switchMode('freeze');
   else if (b.id === 'toLive') api.switchMode('live');
   else if (b.id === 'pass') api.setPass(true);
-  else if (b.id === 'save') { if (mode === 'freeze') $('saveMenu').classList.toggle('show'); else save('view'); }
+  else if (b.id === 'save') { if (mode === 'freeze') toggleSaveMenu(); else save('view'); }
   else if (b.id === 'saveView') save('view');
   else if (b.id === 'saveAll') save('all');
   else if (b.id === 'flip') $('bar').classList.toggle('bottom');
@@ -578,7 +870,9 @@ $('bar').addEventListener('click', (e) => {
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (e.key === ' ') { spaceDown = true; return; }
-  if (e.key === 'Escape') api.close();
+  if (e.key === 'Escape') { if (sel.size) clearSel(); else api.close(); }
+  else if (e.key === 'Delete' || e.key === 'Backspace') deleteSel();
+  else if (e.ctrlKey && k === 'v') paste();
   else if (e.ctrlKey && k === 'z' && !e.shiftKey) undo();
   else if (e.ctrlKey && (k === 'y' || (k === 'z' && e.shiftKey))) redo();
   else if (e.ctrlKey && k === 's') { e.preventDefault(); save(e.shiftKey && mode === 'freeze' ? 'all' : 'view'); }
@@ -588,6 +882,8 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'p') state.tool = 'pen';
   else if (k === 'h') state.tool = 'hl';
   else if (k === 'e') state.tool = 'eraser';
+  else if (k === 'v') state.tool = 'select';
+  if (state.tool !== 'select' && 'phe'.includes(k) && k.length === 1) clearSel();
   updateButtons();
 });
 window.addEventListener('keyup', (e) => { if (e.key === ' ') spaceDown = false; });
@@ -602,6 +898,9 @@ api.onMode(async ({ mode: m, image, size, keepInk }) => {
   erasing = null;
   activeId = null;
   pan = null;
+  xform = null;
+  lasso = null;
+  sel = new Set();
   endTouches();
   hideSaveMenu();
   view.s = 1; view.tx = 0; view.ty = 0; // モードを切り替えたら等倍に戻す
@@ -626,4 +925,4 @@ resize();
 updateButtons();
 
 // 動作確認用（開発者ツールや自動テストから状態を見る）
-window.__ink = { get items() { return items; }, get mode() { return mode; }, view, state };
+window.__ink = { get items() { return items; }, get mode() { return mode; }, get selection() { return sel; }, view, state };

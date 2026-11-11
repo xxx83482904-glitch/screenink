@@ -10,10 +10,15 @@ contextBridge.exposeInMainWorld('api', {
   switchMode: (mode) => ipcRenderer.send('switch-mode', mode),
   setPass: (on) => ipcRenderer.send('set-pass', on),
   close: () => ipcRenderer.send('close-overlay'),
+  readClipboardImage: () => ipcRenderer.invoke('read-clipboard-image'),
+  addCapture: () => ipcRenderer.send('add-capture'),
+  onAddImage: (cb) => ipcRenderer.on('add-image', (_e, payload) => cb(payload)),
   // launcher
   onLauncherState: (cb) => ipcRenderer.on('launcher-state', (_e, s) => cb(s)),
   startFreeze: () => ipcRenderer.send('start-freeze'),
   startLive: () => ipcRenderer.send('start-live'),
   openFolder: () => ipcRenderer.send('open-folder'),
   quit: () => ipcRenderer.send('quit-app'),
+  addShoot: () => ipcRenderer.send('add-shoot'),
+  addCancel: () => ipcRenderer.send('add-cancel'),
 });

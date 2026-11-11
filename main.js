@@ -22,6 +22,7 @@ let mode = 'hidden'; // 'hidden' | 'freeze' | 'live'
 let passthrough = false;
 let display = null;  // いま書き込み中のディスプレイ
 let busy = false;
+let adding = false;  // 追加キャプチャのために書き込み画面を一時的に隠している
 let quitting = false;
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -32,7 +33,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   // 2回目の起動（例：Surfaceペンのボタンにこのアプリを割り当てた場合）は即キャプチャ
-  app.on('second-instance', () => startFreeze());
+  app.on('second-instance', () => (adding ? shootAdd() : startFreeze()));
   app.whenReady().then(init);
 }
 
@@ -41,7 +42,7 @@ function init() {
   createOverlay();
   createLauncher();
   createTray();
-  globalShortcut.register(KEYS.freeze, () => startFreeze());
+  globalShortcut.register(KEYS.freeze, () => (adding ? shootAdd() : startFreeze()));
   globalShortcut.register(KEYS.live, () => startLive());
   globalShortcut.register(KEYS.pass, () => { if (mode === 'live') setPass(!passthrough); });
   globalShortcut.register(KEYS.close, () => closeOverlay());
@@ -80,7 +81,7 @@ function createLauncher() {
 }
 
 function showLauncher(state) {
-  const d = (state === 'pass' && display) || screen.getPrimaryDisplay();
+  const d = (state !== 'idle' && display) || screen.getPrimaryDisplay();
   const wa = d.workArea;
   const [w, h] = launcher.getSize();
   // 初回と、表示先ディスプレイが変わったときだけ右端中央へ。あとはユーザーが動かした位置のまま
@@ -162,7 +163,7 @@ async function presentOverlay(payload) {
 }
 
 async function startFreeze(keepInk = false) {
-  if (busy) return;
+  if (busy || adding) return;
   busy = true;
   try {
     if (mode === 'hidden') display = targetDisplay();
@@ -183,7 +184,7 @@ async function startFreeze(keepInk = false) {
 }
 
 async function startLive(keepInk = false) {
-  if (busy) return;
+  if (busy || adding) return;
   busy = true;
   try {
     if (mode === 'hidden') display = targetDisplay();
@@ -207,9 +208,45 @@ function setPass(on, silent = false) {
   }
 }
 
+// ---------- 追加キャプチャ ----------
+// 書き込み画面をいったん隠し、下の画面を見せる。ランチャーの「撮る」で撮って、キャンバスに並べる
+
+function beginAdd() {
+  if (mode !== 'freeze' || busy || adding) return;
+  adding = true;
+  overlay.hide();
+  showLauncher('add');
+}
+
+function endAdd() {
+  adding = false;
+  launcher.hide();
+  overlay.show();
+  overlay.moveTop();
+  overlay.focus();
+}
+
+async function shootAdd() {
+  if (!adding || busy) return;
+  busy = true;
+  try {
+    const d = targetDisplay(); // マウスカーソル（＝押したランチャー）のある画面
+    launcher.hide();
+    await delay(HIDE_WAIT_MS);
+    const img = await captureDisplay(d);
+    overlay.webContents.send('add-image', { image: img.toDataURL(), size: { w: d.bounds.width, h: d.bounds.height } });
+  } catch (err) {
+    console.error(err);
+  } finally {
+    busy = false;
+    endAdd();
+  }
+}
+
 function closeOverlay() {
   if (mode === 'hidden') return;
   mode = 'hidden';
+  adding = false;
   passthrough = false;
   overlay.setIgnoreMouseEvents(false);
   overlay.hide();
@@ -225,6 +262,20 @@ function openFolder() {
 // ---------- ipc ----------
 
 ipcMain.on('start-freeze', () => startFreeze());
+ipcMain.on('add-capture', () => beginAdd());
+ipcMain.on('add-shoot', () => shootAdd());
+ipcMain.on('add-cancel', () => { if (adding && !busy) endAdd(); });
+
+// クリップボードの画像を data URL で返す（なければ null）
+ipcMain.handle('read-clipboard-image', async () => {
+  for (const item of await clipboard.read()) {
+    const type = item.types.find((t) => t.startsWith('image/'));
+    if (!type) continue;
+    const blob = await item.getType(type);
+    return `data:${type};base64,${Buffer.from(await blob.arrayBuffer()).toString('base64')}`;
+  }
+  return null;
+});
 ipcMain.on('start-live', () => {
   if (mode === 'live' && passthrough) setPass(false); // ランチャーの「書く」に戻る
   else startLive();

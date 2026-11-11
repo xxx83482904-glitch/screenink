@@ -79,6 +79,11 @@ async function key(k, mods = 0, code) {
   await sleep(60);
 }
 const CTRL = 2, SHIFT = 8;
+async function wheel(x, y, deltaX, deltaY, modifiers = 0) {
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX, deltaY, modifiers });
+  await sleep(80);
+}
+const send = (ch, payload) => win.webContents.send(ch, payload);
 
 const click = (id) => js(`document.getElementById(${JSON.stringify(id)}).click()`);
 const state = () => js(`(() => { const k = window.__ink; return {
@@ -127,7 +132,7 @@ const freeze = (keepInk = false) => setMode({
 
 const suites = [];
 const suite = (name, fn) => suites.push({ name, fn });
-module.exports = { suite, ok, near, sleep, js, state, strokes, images, pixel, shot, pen, drag, line, path2, touch, twoFinger, tap, key, click, freeze, setMode, saved, CTRL, SHIFT, W, H, SCALE, fakeCapture,
+module.exports = { wheel, send, suite, ok, near, sleep, js, state, strokes, images, pixel, shot, pen, drag, line, path2, touch, twoFinger, tap, key, click, freeze, setMode, saved, CTRL, SHIFT, W, H, SCALE, fakeCapture,
   get win() { return win; } };
 
 for (const f of fs.readdirSync(__dirname).filter((n) => /^e2e-.*\.js$/.test(n)).sort()) require(path.join(__dirname, f));

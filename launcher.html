@@ -16,8 +16,8 @@
     font-size: 11px; line-height: 1.25; width: 48px; height: 48px; padding: 0; border-radius: 10px; cursor: pointer; }
   button:hover { background: rgba(255, 255, 255, 0.12); }
   button.accent { background: #ff453a; color: #fff; }
-  body[data-state="idle"] .pass-only { display: none; }
-  body[data-state="pass"] .idle-only { display: none; }
+  .idle-only, .pass-only, .add-only { display: none; }
+  body[data-state="idle"] .idle-only, body[data-state="pass"] .pass-only, body[data-state="add"] .add-only { display: block; }
 </style>
 </head>
 <body data-state="idle">
@@ -30,6 +30,8 @@
     <button id="back" class="pass-only accent" title="書き込みに戻る">書く</button>
     <button id="snap" class="pass-only" title="今の画面を止めて書く">静止</button>
     <button id="close" class="pass-only" title="書き込みを消して閉じる">閉じる</button>
+    <button id="shoot" class="add-only accent" title="この画面を撮ってキャンバスに並べる (Ctrl+Alt+S)">撮る</button>
+    <button id="cancel" class="add-only" title="撮らずに書き込みへ戻る">戻る</button>
   </div>
   <script src="launcher.js"></script>
 </body>

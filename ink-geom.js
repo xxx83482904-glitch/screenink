@@ -102,5 +102,73 @@
     return pieces;
   }
 
-  return { widthOf, strokeBox, itemBox, unionBox, boxesOverlap, distSegPoint, densify, eraseStroke };
+  function distToStroke(s, p) {
+    const pts = s.pts;
+    if (pts.length === 1) return Math.hypot(p.x - pts[0].x, p.y - pts[0].y);
+    let d = Infinity;
+    for (let i = 1; i < pts.length; i++) d = Math.min(d, distSegPoint(pts[i - 1], pts[i], p));
+    return d;
+  }
+
+  const inBox = (b, p, pad = 0) => p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad;
+
+  // 点 p の下にある一番上のもの。線を画像より優先する。accept で対象を絞れる
+  function hitItem(items, p, tol, accept) {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.type !== 'stroke' || (accept && !accept(it))) continue;
+      if (!inBox(strokeBox(it), p, tol)) continue;
+      if (distToStroke(it, p) <= widthOf(it, 0.5) / 2 + tol) return it;
+    }
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.type !== 'image' || (accept && !accept(it))) continue;
+      if (inBox(it, p)) return it;
+    }
+    return null;
+  }
+
+  function pointInPoly(p, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[i], b = poly[j];
+      if ((a.y > p.y) !== (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    return inside;
+  }
+
+  // そのものの何割が多角形の内側にあるか（0〜1）
+  function insideFraction(it, poly) {
+    const pts = it.type === 'image'
+      ? [{ x: it.x, y: it.y }, { x: it.x + it.w, y: it.y }, { x: it.x, y: it.y + it.h }, { x: it.x + it.w, y: it.y + it.h },
+        { x: it.x + it.w / 2, y: it.y + it.h / 2 }]
+      : it.pts;
+    let n = 0;
+    for (const p of pts) if (pointInPoly(p, poly)) n++;
+    return n / pts.length;
+  }
+
+  // 多角形でおおむね囲まれたもの
+  function lassoTargets(items, poly, minFrac, accept) {
+    return items.filter((it) => (!accept || accept(it)) && insideFraction(it, poly) >= minFrac);
+  }
+
+  // 移動・拡大縮小: p' = (p - a) * s + a + d。元の要素は書き換えず新しい要素を返す
+  function transformItem(it, f) {
+    const tx = (x) => (x - f.ax) * f.s + f.ax + f.dx;
+    const ty = (y) => (y - f.ay) * f.s + f.ay + f.dy;
+    if (it.type === 'image') return Object.assign({}, it, { x: tx(it.x), y: ty(it.y), w: it.w * f.s, h: it.h * f.s });
+    return Object.assign({}, it, { size: it.size * f.s, pts: it.pts.map((p) => ({ x: tx(p.x), y: ty(p.y), p: p.p })) });
+  }
+
+  function pathLength(pts) {
+    let n = 0;
+    for (let i = 1; i < pts.length; i++) n += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    return n;
+  }
+
+  return {
+    widthOf, strokeBox, itemBox, unionBox, boxesOverlap, distSegPoint, densify, eraseStroke,
+    distToStroke, inBox, hitItem, pointInPoly, insideFraction, lassoTargets, transformItem, pathLength,
+  };
 });
