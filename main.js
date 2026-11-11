@@ -172,7 +172,8 @@ async function startFreeze(keepInk = false) {
     await delay(HIDE_WAIT_MS);
     const img = await captureDisplay(display);
     mode = 'freeze';
-    await presentOverlay({ mode, image: img.toDataURL(), keepInk });
+    // size = この画面の CSS px での大きさ。キャプチャ画像をワールド座標に置くときに使う
+    await presentOverlay({ mode, image: img.toDataURL(), size: { w: display.bounds.width, h: display.bounds.height }, keepInk });
   } catch (err) {
     console.error(err);
     if (mode === 'hidden') showLauncher('idle'); else overlay.show();
