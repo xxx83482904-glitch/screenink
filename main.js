@@ -26,7 +26,7 @@ let adding = false;  // 追加キャプチャのために書き込み画面を�
 let quitting = false;
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
-const saveDir = () => path.join(app.getPath('pictures'), 'ScreenInk');
+const saveDir = () => app.getPath('desktop');
 const preload = path.join(__dirname, 'preload.js');
 
 if (!app.requestSingleInstanceLock()) {
@@ -108,7 +108,7 @@ function createTray() {
     { label: `キャプチャして書く (${KEYS.freeze.replace('Control', 'Ctrl')})`, click: () => startFreeze() },
     { label: `画面に重ねて書く (${KEYS.live.replace('Control', 'Ctrl')})`, click: () => startLive() },
     { type: 'separator' },
-    { label: '保存フォルダを開く', click: openFolder },
+    { label: '保存先（デスクトップ）を開く', click: openFolder },
     { type: 'separator' },
     { label: `バージョン ${app.getVersion()}`, enabled: false },
     { label: 'アップデートを確認…', click: () => openUpdateWindow(true) },

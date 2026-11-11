@@ -104,6 +104,16 @@ t.suite('1. ワールド座標・ピンチ・無限キャンバス', async () =>
   await t.sleep(400);
   let last = t.saved[t.saved.length - 1];
   ok(last && last.width === cw && last.height === ch, '「今見えている範囲」は画面と同じ画素数', JSON.stringify(last));
+  {
+    const nS = t.saved.length, nC = t.copied.length;
+    await t.click('copyView');
+    await t.sleep(400);
+    const c = t.copied[t.copied.length - 1];
+    ok(t.saved.length === nS && t.copied.length === nC + 1 && c.width === last.width && c.height === last.height, '「コピーのみ：見えている範囲」はファイルを作らず、保存と同じ大きさをコピーする');
+    await t.click('copyAll');
+    await t.sleep(400);
+    ok(t.saved.length === nS && t.copied.length === nC + 2 && (await t.state()).toast.includes('コピー'), '「コピーのみ：全体」もファイルを作らない');
+  }
   await t.click('saveAll');
   await t.sleep(600);
   last = t.saved[t.saved.length - 1];
@@ -120,9 +130,19 @@ t.suite('1. ワールド座標・ピンチ・無限キャンバス', async () =>
   await t.pen(t.line([200, 500], [300, 520]));
   ok(t.strokes(await t.state()).length === 5, 'ライブでも従来どおり書ける');
   await t.click('save');
+  ok(await t.js(`getComputedStyle(document.getElementById('saveAll')).display === 'none' && getComputedStyle(document.getElementById('copyView')).display !== 'none'`), 'ライブの保存メニューは「全体」を出さない');
+  await t.click('saveView');
   await t.sleep(500);
   last = t.saved[t.saved.length - 1];
   ok(last && last.width === cw && last.height === ch, 'ライブの保存は画面と同じ画素数');
+  {
+    const nS = t.saved.length, nC = t.copied.length;
+    await t.click('save');
+    await t.click('copyView');
+    await t.sleep(500);
+    const c = t.copied[t.copied.length - 1];
+    ok(t.saved.length === nS && t.copied.length === nC + 1 && c.width === cw && c.height === ch, 'ライブの「コピーのみ」はファイルを作らず、画面と同じ画素数をコピーする');
+  }
 
   // 静止へ戻すと書き込みは残り、キャプチャは1枚に差し替わる
   await t.freeze(true);

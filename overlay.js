@@ -882,7 +882,8 @@ api.onAddImage(async ({ image, size }) => {
 
 let saving = false;
 // kind: 'view' = 今見えている範囲、'all' = 書き込みと画像を含む全体
-async function save(kind) {
+// copyOnly: true ならファイルを作らず、クリップボードにだけコピーする
+async function save(kind, copyOnly) {
   hideSaveMenu();
   if (saving || busy()) return;
   saving = true;
@@ -899,7 +900,7 @@ async function save(kind) {
       paintStrokes(x, strokesOf(items), { k: dpr, ox: 0, oy: 0 });
     } else if (kind === 'all') {
       const b = G.unionBox(items.map(G.itemBox));
-      if (!b) { toast('保存する内容がありません'); return; }
+      if (!b) { toast(copyOnly ? 'コピーする内容がありません' : '保存する内容がありません'); return; }
       const m = 16;
       const box = { x: b.x - m, y: b.y - m, w: b.w + m * 2, h: b.h + m * 2 };
       out = renderBox(box, exportScale(box));
@@ -907,10 +908,14 @@ async function save(kind) {
       const box = { x: -view.tx / view.s, y: -view.ty / view.s, w: window.innerWidth / view.s, h: window.innerHeight / view.s };
       out = renderBox(box, dpr * view.s);
     }
+    if (copyOnly) {
+      toast((await api.copyPng(out.toDataURL('image/png'))) ? 'クリップボードにコピーしました（ファイルは作っていません）' : 'コピーに失敗しました');
+      return;
+    }
     const { file, copied } = await api.save(out.toDataURL('image/png'));
     toast((copied ? '保存してクリップボードにコピーしました　' : '保存しました（コピーは失敗）　') + file);
   } catch (err) {
-    toast('保存に失敗しました: ' + err.message);
+    toast((copyOnly ? 'コピー' : '保存') + 'に失敗しました: ' + err.message);
   } finally {
     saving = false;
   }
@@ -932,6 +937,8 @@ function hideSaveMenu() { $('saveMenu').classList.remove('show'); }
 // 保存メニューを「保存」ボタンの位置に出す（ツールバーが折り返していても合うように）
 function toggleSaveMenu() {
   const m = $('saveMenu'), b = $('save');
+  // 「全体」は静止モードだけ（ライブは画面そのものが範囲）
+  $('saveAll').style.display = $('copyAll').style.display = mode === 'freeze' ? '' : 'none';
   m.style.left = b.offsetLeft + 'px';
   m.classList.toggle('show');
 }
@@ -971,9 +978,11 @@ $('bar').addEventListener('click', (e) => {
   else if (b.id === 'toFreeze') api.switchMode('freeze');
   else if (b.id === 'toLive') api.switchMode('live');
   else if (b.id === 'pass') api.setPass(true);
-  else if (b.id === 'save') { if (mode === 'freeze') toggleSaveMenu(); else save('view'); }
+  else if (b.id === 'save') toggleSaveMenu();
   else if (b.id === 'saveView') save('view');
   else if (b.id === 'saveAll') save('all');
+  else if (b.id === 'copyView') save('view', true);
+  else if (b.id === 'copyAll') save('all', true);
   else if (b.id === 'flip') $('bar').classList.toggle('bottom');
   else if (b.id === 'close') api.close();
   updateButtons();
@@ -985,6 +994,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { if (sel.size) clearSel(); else api.close(); }
   else if (e.key === 'Delete' || e.key === 'Backspace') deleteSel();
   else if (e.ctrlKey && k === 'v') paste();
+  else if (e.ctrlKey && e.shiftKey && k === 'c') { e.preventDefault(); save('view', true); }
   else if (e.ctrlKey && k === 'c') copySel();
   else if (e.ctrlKey && k === 'z' && !e.shiftKey) undo();
   else if (e.ctrlKey && (k === 'y' || (k === 'z' && e.shiftKey))) redo();
