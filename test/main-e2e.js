@@ -1,10 +1,15 @@
 // 実際の main.js を起動し、ランチャーやツールバーのボタンと同じ IPC を呼んで、
 // ウィンドウ制御・画面キャプチャ・モード切り替えを確かめる（OS へのキー/マウス入力は送らない）。
 //   npm run test:main
-// 数秒間、全画面の書き込み画面が実際に表示されます。保存とクリップボードには触りません。
+// 数秒間、全画面の書き込み画面が実際に表示されます。保存は一時フォルダに書き、クリップボードには触りません。
 const { app, BrowserWindow, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
+// 保存先（デスクトップ）はテスト用のフォルダに差し替える
+const DESK = path.join(require('os').tmpdir(), 'screenink-test-desktop');
+fs.rmSync(DESK, { recursive: true, force: true });
+fs.mkdirSync(DESK, { recursive: true });
+app.setPath('desktop', DESK);
 require('../main.js');
 
 const OUT = process.env.OUT || path.join(__dirname, 'out');
@@ -80,9 +85,27 @@ app.whenReady().then(async () => {
     await sleep(400);
     ok(!launcher.isVisible() && (await oj('document.body.dataset.pass')) === '0', 'ランチャーの「書く」で書き込みに戻る');
 
+    // あとで編集できる形で保存 → 閉じる → ファイルをダブルクリックしたときと同じ起動で開く
+    await oj("document.getElementById('saveEdit').click()");
+    await sleep(1500);
+    const files = fs.readdirSync(DESK);
+    const doc = files.find((f) => f.endsWith('.screenink'));
+    ok(!!doc && files.includes(doc.replace('.screenink', '.png')), 'デスクトップに .screenink と同じ名前の PNG が保存される', files.join(', '));
+    ok(overlay.isVisible() && (await info()).strokes === 1, '保存しても書き込みは残る');
+
     await oj('api.close()');
     await sleep(500);
     ok(!overlay.isVisible() && launcher.isVisible() && (await lstate()) === 'idle' && (await info()).strokes === 0, '閉じるとランチャーに戻り、書き込みは消える');
+
+    if (doc) {
+      app.emit('second-instance', {}, [process.execPath, path.join(DESK, doc)]);
+      await sleep(1500);
+      i = await info();
+      ok(overlay.isVisible() && i.mode === 'freeze' && i.strokes === 1 && i.images.length === 1 && i.images[0].w === d.bounds.width,
+        '.screenink を開くと、背景と線が線のまま戻る', JSON.stringify(i));
+      await oj('api.close()');
+      await sleep(500);
+    }
   } catch (err) {
     failed++;
     console.log('  FAIL (例外) ' + (err.stack || err));

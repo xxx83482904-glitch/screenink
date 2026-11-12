@@ -1285,6 +1285,77 @@ async function save(kind, copyOnly) {
   }
 }
 
+// ---------- あとで編集できる形で保存（.screenink） ----------
+// 線は点の列のまま、画像は PNG のまま入れた JSON。開くと静止モードになり、線を動かす・消す・書き足すことができる。
+const DOC_FORMAT = 'screenink';
+const DOC_VERSION = 1;
+const r2 = (v) => Math.round(v * 100) / 100;
+
+function imgSrc(img) {
+  if (img.src.startsWith('data:')) return img.src;
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth; c.height = img.naturalHeight;
+  c.getContext('2d').drawImage(img, 0, 0);
+  return c.toDataURL('image/png');
+}
+
+function docItem(it) {
+  if (it.type === 'image') return { type: 'image', base: !!it.base, x: it.x, y: it.y, w: it.w, h: it.h, src: imgSrc(it.img) };
+  const { id, t, pts, ...rest } = it; // eslint-disable-line no-unused-vars
+  return { ...rest, pts: pts.map((p) => [r2(p.x), r2(p.y), r2(p.p)]) };
+}
+
+// 保存する中身。ライブ時は今の画面を撮って、それを下敷きの画像にする
+async function buildDoc() {
+  let list = items;
+  if (mode === 'live') {
+    const img = await loadImg(await api.grabScreen());
+    list = [{ type: 'image', base: true, img, x: 0, y: 0, w: window.innerWidth, h: window.innerHeight }, ...strokesOf(items)];
+  }
+  if (!list.length) return null;
+  return { list, json: JSON.stringify({ format: DOC_FORMAT, version: DOC_VERSION, items: list.map(docItem) }) };
+}
+
+async function saveEditable() {
+  hideSaveMenu();
+  if (saving || busy()) return;
+  saving = true;
+  try {
+    const doc = await buildDoc();
+    if (!doc || !strokesOf(doc.list).length && mode === 'live') { toast('保存する内容がありません'); return; }
+    const b = G.unionBox(doc.list.map(G.itemBox));
+    const m = 16;
+    const box = { x: b.x - m, y: b.y - m, w: b.w + m * 2, h: b.h + m * 2 };
+    const png = renderBox(box, exportScale(box, doc.list), doc.list).toDataURL('image/png');
+    const { file } = await api.saveDoc(doc.json, png);
+    toast('あとで編集できる形で保存しました（PNG も一緒に）　' + file);
+  } catch (err) {
+    toast('保存に失敗しました: ' + err.message);
+  } finally {
+    saving = false;
+  }
+}
+
+// 保存したファイルを読み込んで、取り消しの起点にする
+async function loadDoc(json) {
+  const d = typeof json === 'string' ? JSON.parse(json) : json;
+  if (!d || d.format !== DOC_FORMAT || !Array.isArray(d.items)) throw new Error('ScreenInk のファイルではありません');
+  if (d.version > DOC_VERSION) throw new Error('新しい版の ScreenInk で保存されたファイルです。アップデートしてください');
+  const list = [];
+  for (const it of d.items) {
+    if (it.type === 'image') {
+      const img = await loadImg(it.src);
+      list.push({ id: nextId++, type: 'image', base: !!it.base, img, x: it.x, y: it.y, w: it.w, h: it.h, t: 0 });
+    } else if (it.type === 'stroke' && Array.isArray(it.pts) && it.pts.length) {
+      const { pts, ...rest } = it;
+      list.push({ ...rest, id: nextId++, t: 0, pts: pts.map(([x, y, p]) => ({ x, y, p })) });
+    }
+  }
+  items = list;
+  history = [items];
+  hi = 0;
+}
+
 let toastTimer = 0;
 function toast(msg) {
   const t = $('toast');
@@ -1362,6 +1433,7 @@ $('bar').addEventListener('click', (e) => {
   else if (b.id === 'saveAll') save('all');
   else if (b.id === 'copyView') save('view', true);
   else if (b.id === 'copyAll') save('all', true);
+  else if (b.id === 'saveEdit') saveEditable();
   else if (b.id === 'flip') $('bar').classList.toggle('bottom');
   else if (b.id === 'close') api.close();
   updateButtons();
@@ -1395,7 +1467,7 @@ window.addEventListener('blur', () => { spaceDown = false; });
 
 // ---------- from main ----------
 
-api.onMode(async ({ mode: m, image, size, keepInk }) => {
+api.onMode(async ({ mode: m, image, size, keepInk, doc }) => {
   mode = m;
   document.body.dataset.mode = m;
   cur = null;
@@ -1413,6 +1485,10 @@ api.onMode(async ({ mode: m, image, size, keepInk }) => {
   hideSaveMenu();
   view.s = 1; view.tx = 0; view.ty = 0; // モードを切り替えたら等倍に戻す
   if (!keepInk) resetHistory();
+  let opened = false;
+  if (m === 'freeze' && doc) {
+    try { await loadDoc(doc.json); opened = true; } catch (err) { setTimeout(() => toast('開けませんでした: ' + err.message), 0); }
+  }
   if (m === 'freeze' && image) {
     try {
       const img = await loadImg(image);
@@ -1422,6 +1498,7 @@ api.onMode(async ({ mode: m, image, size, keepInk }) => {
     } catch (_) { /* 背景なしで続行 */ }
   }
   resize();
+  if (opened) { fitAll(); setTimeout(() => toast('開きました　' + doc.name), 0); }
   updateButtons();
   api.ready();
 });

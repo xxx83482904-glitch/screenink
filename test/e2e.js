@@ -15,6 +15,7 @@ let win, dbg;
 let failed = 0, passed = 0;
 const saved = [];
 const copied = [];
+const docs = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const js = (code) => win.webContents.executeJavaScript(code);
 const cdp = (method, params) => dbg.sendCommand(method, params);
@@ -133,7 +134,7 @@ const freeze = (keepInk = false) => setMode({
 
 const suites = [];
 const suite = (name, fn) => suites.push({ name, fn });
-module.exports = { wheel, send, suite, ok, near, sleep, js, state, strokes, images, pixel, shot, pen, drag, line, path2, touch, twoFinger, tap, key, click, freeze, setMode, saved, copied, CTRL, SHIFT, W, H, SCALE, fakeCapture,
+module.exports = { wheel, send, suite, ok, near, sleep, js, state, strokes, images, pixel, shot, pen, drag, line, path2, touch, twoFinger, tap, key, click, freeze, setMode, saved, copied, docs, CTRL, SHIFT, W, H, SCALE, fakeCapture,
   get win() { return win; } };
 
 for (const f of fs.readdirSync(__dirname).filter((n) => /^e2e-.*\.js$/.test(n)).sort()) require(path.join(__dirname, f));
@@ -147,6 +148,7 @@ app.whenReady().then(async () => {
     saved.push({ file, ...img.getSize() });
     return { file, copied: true };
   });
+  ipcMain.handle('save-doc', (_e, json, dataUrl) => { docs.push({ json, png: nativeImage.createFromDataURL(dataUrl).getSize() }); return { file: 'test' + docs.length + '.screenink' }; });
   ipcMain.handle('grab-screen', () => fakeCapture(Math.round(W * SCALE), Math.round(H * SCALE)).toDataURL());
   module.exports.clipboardImage = null;
   ipcMain.handle('read-clipboard-image', () => module.exports.clipboardImage);

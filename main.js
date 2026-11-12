@@ -1,7 +1,7 @@
 // ScreenInk — 画面をキャプチャして、そのままペンで書き込むアプリ
 const {
   app, BrowserWindow, globalShortcut, desktopCapturer, screen, ipcMain,
-  Tray, Menu, nativeImage, clipboard, ClipboardItem, shell,
+  Tray, Menu, nativeImage, clipboard, ClipboardItem, shell, dialog,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -36,8 +36,12 @@ const preload = path.join(__dirname, 'preload.js');
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  // 2回目の起動（例：Surfaceペンのボタンにこのアプリを割り当てた場合）は即キャプチャ
-  app.on('second-instance', () => (adding ? shootAdd() : startFreeze()));
+  // 2回目の起動（例：Surfaceペンのボタンにこのアプリを割り当てた場合）は即キャプチャ。
+  // .screenink をダブルクリックして起動されたときは、そのファイルを開く
+  app.on('second-instance', (_e, argv) => {
+    const f = docArg(argv);
+    if (f) openDoc(f); else if (adding) shootAdd(); else startFreeze();
+  });
   app.whenReady().then(init);
 }
 
@@ -52,6 +56,8 @@ function init() {
   globalShortcut.register(KEYS.close, () => closeOverlay());
   showLauncher('idle');
   initUpdater();
+  const f = docArg(process.argv);
+  if (f) overlay.webContents.once('did-finish-load', () => openDoc(f));
 }
 
 app.on('before-quit', () => { quitting = true; });
@@ -112,6 +118,7 @@ function createTray() {
     { label: `キャプチャして書く (${KEYS.freeze.replace('Control', 'Ctrl')})`, click: () => startFreeze() },
     { label: `画面に重ねて書く (${KEYS.live.replace('Control', 'Ctrl')})`, click: () => startLive() },
     { type: 'separator' },
+    { label: '編集できるファイルを開く…', click: () => pickDoc() },
     { label: '保存先（デスクトップ）を開く', click: openFolder },
     { type: 'separator' },
     { label: `バージョン ${app.getVersion()}`, enabled: false },
@@ -266,6 +273,36 @@ function closeOverlay() {
   showLauncher('idle');
 }
 
+// ---------- あとで編集できるファイル（.screenink） ----------
+
+const DOC_EXT = '.screenink';
+const docArg = (argv) => argv.slice(1).find((a) => a.toLowerCase().endsWith(DOC_EXT) && fs.existsSync(a));
+
+async function pickDoc() {
+  const r = await dialog.showOpenDialog({
+    title: '編集できるファイルを開く', defaultPath: saveDir(), properties: ['openFile'],
+    filters: [{ name: 'ScreenInk の書き込み', extensions: ['screenink'] }],
+  });
+  if (!r.canceled && r.filePaths[0]) openDoc(r.filePaths[0]);
+}
+
+async function openDoc(file) {
+  if (busy || adding) return;
+  busy = true;
+  try {
+    const json = await fs.promises.readFile(file, 'utf8');
+    if (mode === 'hidden') display = targetDisplay();
+    if (passthrough) setPass(false, true);
+    mode = 'freeze';
+    await presentOverlay({ mode, image: null, keepInk: false, doc: { json, name: path.basename(file) } });
+  } catch (err) {
+    console.error(err);
+    dialog.showErrorBox('ScreenInk', 'ファイルを開けませんでした\n' + file + '\n' + err.message);
+  } finally {
+    busy = false;
+  }
+}
+
 function openFolder() {
   fs.mkdirSync(saveDir(), { recursive: true });
   shell.openPath(saveDir());
@@ -384,14 +421,30 @@ async function copyPng(png) {
 
 ipcMain.handle('copy-png', (_e, dataUrl) => copyPng(nativeImage.createFromDataURL(dataUrl).toPNG()));
 
-ipcMain.handle('save-png', async (_e, dataUrl) => {
-  const png = nativeImage.createFromDataURL(dataUrl).toPNG();
+// 保存するファイル名（拡張子なし）。同じ秒に2回保存しても上書きしない
+function saveBase(exts) {
   const t = new Date();
   const p2 = (n) => String(n).padStart(2, '0');
-  const name = `ScreenInk_${t.getFullYear()}${p2(t.getMonth() + 1)}${p2(t.getDate())}_` +
-    `${p2(t.getHours())}${p2(t.getMinutes())}${p2(t.getSeconds())}.png`;
+  const stamp = `ScreenInk_${t.getFullYear()}${p2(t.getMonth() + 1)}${p2(t.getDate())}_` +
+    `${p2(t.getHours())}${p2(t.getMinutes())}${p2(t.getSeconds())}`;
   fs.mkdirSync(saveDir(), { recursive: true });
-  const file = path.join(saveDir(), name);
+  for (let i = 1; ; i++) {
+    const base = path.join(saveDir(), i === 1 ? stamp : `${stamp}_${i}`);
+    if (!exts.some((e) => fs.existsSync(base + e))) return base;
+  }
+}
+
+ipcMain.handle('save-png', async (_e, dataUrl) => {
+  const png = nativeImage.createFromDataURL(dataUrl).toPNG();
+  const file = saveBase(['.png']) + '.png';
   await fs.promises.writeFile(file, png);
   return { file, copied: await copyPng(png) }; // コピーに失敗してもファイルは残す
+});
+
+// 線を線のまま保存する（.screenink）。見るための PNG も同じ名前で横に置く
+ipcMain.handle('save-doc', async (_e, json, dataUrl) => {
+  const base = saveBase([DOC_EXT, '.png']);
+  await fs.promises.writeFile(base + DOC_EXT, json, 'utf8');
+  await fs.promises.writeFile(base + '.png', nativeImage.createFromDataURL(dataUrl).toPNG());
+  return { file: base + DOC_EXT };
 });

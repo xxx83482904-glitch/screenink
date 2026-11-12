@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   ready: () => ipcRenderer.send('overlay-ready'),
   grabScreen: () => ipcRenderer.invoke('grab-screen'),
   save: (dataUrl) => ipcRenderer.invoke('save-png', dataUrl),
+  saveDoc: (json, dataUrl) => ipcRenderer.invoke('save-doc', json, dataUrl),
   switchMode: (mode) => ipcRenderer.send('switch-mode', mode),
   setPass: (on) => ipcRenderer.send('set-pass', on),
   close: () => ipcRenderer.send('close-overlay'),

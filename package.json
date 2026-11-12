@@ -52,6 +52,13 @@
       ],
       "icon": "build/icon.png"
     },
+    "fileAssociations": [
+      {
+        "ext": "screenink",
+        "name": "ScreenInk.Drawing",
+        "description": "ScreenInk の書き込み（あとで編集できる形式）"
+      }
+    ],
     "nsis": {
       "oneClick": true,
       "perMachine": false,
