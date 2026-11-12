@@ -1,8 +1,9 @@
 /* global api, Geom */
 const $ = (id) => document.getElementById(id);
-const bg = $('bg'), ink = $('ink'), live = $('live'), ui = $('ui');
+const bg = $('bg'), ink = $('ink'), drag = $('drag'), live = $('live'), ui = $('ui');
 const bctx = bg.getContext('2d');
 const ictx = ink.getContext('2d');
+const dctx = drag.getContext('2d'); // 選択して動かしている最中のものだけを描く層
 const lctx = live.getContext('2d');
 const uctx = ui.getContext('2d');
 const G = Geom;
@@ -67,16 +68,6 @@ function setBase(base) {
 
 // ---------- render ----------
 
-const scratch = document.createElement('canvas'); // マーカー1本ぶんを不透明で描く作業用
-let exportScratch = null;
-
-function scratchFor(w, h) {
-  if (w === scratch.width && h === scratch.height) return scratch;
-  if (!exportScratch) exportScratch = document.createElement('canvas');
-  if (exportScratch.width !== w || exportScratch.height !== h) { exportScratch.width = w; exportScratch.height = h; }
-  return exportScratch;
-}
-
 // ワールド → デバイスピクセルの変換
 const devT = () => ({ k: dpr * view.s, ox: dpr * view.tx, oy: dpr * view.ty });
 const setT = (ctx, t) => ctx.setTransform(t.k, 0, 0, t.k, t.ox, t.oy);
@@ -85,7 +76,7 @@ function resize() {
   dpr = window.devicePixelRatio || 1;
   const w = Math.round(window.innerWidth * dpr);
   const h = Math.round(window.innerHeight * dpr);
-  for (const c of [bg, ink, live, ui, scratch]) { c.width = w; c.height = h; }
+  for (const c of [bg, ink, drag, live, ui]) { c.width = w; c.height = h; }
   drawAll();
 }
 
@@ -124,19 +115,22 @@ function prep(ctx, s, t) {
 
 const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
-// i-1 番目の点を制御点にした2次曲線で、中点から中点までをつなぐ
-function drawSeg(ctx, s, i) {
+// 太さは 0.5 デバイス px 刻みに丸める（同じ太さが続く区間を1本のパスにまとめて速く描くため）
+const qWidth = (w, k) => Math.max(0.5, Math.round(w * k * 2) / 2) / k;
+
+// i-1 番目の点を制御点にした2次曲線で、中点から中点までをつなぐ（書いている最中の1区間）
+function drawSeg(ctx, s, i, k) {
   const a = s.pts[i - 1], b = s.pts[i];
   const m1 = i > 1 ? mid(s.pts[i - 2], a) : a;
   const m2 = mid(a, b);
   ctx.beginPath();
   ctx.moveTo(m1.x, m1.y);
   ctx.quadraticCurveTo(a.x, a.y, m2.x, m2.y);
-  ctx.lineWidth = G.widthOf(s, (a.p + b.p) / 2);
+  ctx.lineWidth = qWidth(G.widthOf(s, (a.p + b.p) / 2), k);
   ctx.stroke();
 }
 
-function drawTail(ctx, s) {
+function drawTail(ctx, s, k) {
   const n = s.pts.length;
   const b = s.pts[n - 1];
   if (n === 1) {
@@ -149,18 +143,46 @@ function drawTail(ctx, s) {
   ctx.beginPath();
   ctx.moveTo(m.x, m.y);
   ctx.lineTo(b.x, b.y);
-  ctx.lineWidth = G.widthOf(s, b.p);
+  ctx.lineWidth = qWidth(G.widthOf(s, b.p), k);
   ctx.stroke();
 }
 
-function drawStroke(ctx, s, t) {
+// 1本の線をまとめて描く。alpha はマーカーの濃さ
+function drawStroke(ctx, s, t, alpha = 1) {
   prep(ctx, s, t);
-  for (let i = 1; i < s.pts.length; i++) drawSeg(ctx, s, i);
-  drawTail(ctx, s);
+  ctx.globalAlpha = alpha;
+  const pts = s.pts, n = pts.length;
+  if (n === 1) { drawTail(ctx, s, t.k); return; }
+  if (s.tool === 'hl') {
+    // マーカーは太さが一定なので全体を1本のパスにする。1回で塗るので、自分自身との重なりは濃くならない
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < n; i++) { const a = pts[i - 1], m = mid(a, pts[i]); ctx.quadraticCurveTo(a.x, a.y, m.x, m.y); }
+    ctx.lineTo(pts[n - 1].x, pts[n - 1].y);
+    ctx.lineWidth = G.widthOf(s, 0.5);
+    ctx.stroke();
+    return;
+  }
+  let w0 = 0;
+  for (let i = 1; i < n; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const w = qWidth(G.widthOf(s, (a.p + b.p) / 2), t.k);
+    if (w !== w0) {
+      if (w0) ctx.stroke();
+      const m1 = i > 1 ? mid(pts[i - 2], a) : a;
+      ctx.beginPath();
+      ctx.moveTo(m1.x, m1.y);
+      ctx.lineWidth = w;
+      w0 = w;
+    }
+    const m2 = mid(a, b);
+    ctx.quadraticCurveTo(a.x, a.y, m2.x, m2.y);
+  }
+  ctx.stroke();
+  drawTail(ctx, s, t.k);
 }
 
-// ストロークをベクターから描く。マーカーは1本ずつ不透明で描いてから半透明で重ねる
-// （1本の中の重なりで濃くならない）
+// ストロークをベクターから描く。画面の外にあるものは飛ばす
 function paintStrokes(ctx, list, t) {
   const W = ctx.canvas.width, H = ctx.canvas.height;
   for (const s of list) {
@@ -170,19 +192,9 @@ function paintStrokes(ctx, list, t) {
     const x1 = Math.min(W, Math.ceil((b.x + b.w) * t.k + t.ox) + 2);
     const y1 = Math.min(H, Math.ceil((b.y + b.h) * t.k + t.oy) + 2);
     if (x1 <= x0 || y1 <= y0) continue; // 画面外
-    if (s.tool !== 'hl') { drawStroke(ctx, s, t); continue; }
-    const sc = scratchFor(W, H);
-    const sx = sc.getContext('2d');
-    sx.setTransform(1, 0, 0, 1, 0, 0);
-    sx.clearRect(x0, y0, x1 - x0, y1 - y0);
-    drawStroke(sx, s, t);
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = HL_ALPHA;
-    ctx.drawImage(sc, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
-    ctx.restore();
+    drawStroke(ctx, s, t, s.tool === 'hl' ? HL_ALPHA : 1);
   }
+  ctx.globalAlpha = 1;
 }
 
 function drawBg() {
@@ -194,12 +206,45 @@ function drawBg() {
   paintImages(bctx, devT(), true);
 }
 
+const inkView = { s: 1, tx: 0, ty: 0 }; // 線を最後に描いたときの表示
+
 function drawInk() {
-  clearCtx(ictx);
+  ink.style.transform = '';
+  inkView.s = view.s; inkView.tx = view.tx; inkView.ty = view.ty;
+  clearCtx(dctx);
   clearCtx(lctx);
   const t = devT();
-  paintStrokes(ictx, strokesOf(items), t);
+  if (xform && xform.moved) {
+    // 選択したものを動かしている間は、動かない線を1回だけ描いておき、動くものだけ別の層に毎コマ描く
+    const key = view.s + ',' + view.tx + ',' + view.ty + ',' + ink.width + ',' + ink.height;
+    if (xform.staticKey !== key) {
+      xform.staticKey = key;
+      clearCtx(ictx);
+      paintStrokes(ictx, strokesOf(xform.base).filter((it) => !xform.ids.has(it.id)), t);
+    }
+    paintStrokes(dctx, strokesOf(items).filter((it) => xform.ids.has(it.id)), t);
+  } else {
+    clearCtx(ictx);
+    paintStrokes(ictx, strokesOf(items), t);
+  }
   if (cur) drawStroke(cur.tool === 'hl' ? lctx : ictx, cur, t);
+}
+
+// ワールド座標の範囲 b に掛かる線だけを描き直す（消しゴム用）
+function drawInkRegion(b) {
+  if (ink.style.transform) { drawAll(); return; }
+  const t = devT(), pad = 3;
+  const x0 = Math.floor(b.x * t.k + t.ox) - pad, y0 = Math.floor(b.y * t.k + t.oy) - pad;
+  const x1 = Math.ceil((b.x + b.w) * t.k + t.ox) + pad, y1 = Math.ceil((b.y + b.h) * t.k + t.oy) + pad;
+  const box = { x: b.x - pad / t.k, y: b.y - pad / t.k, w: b.w + pad * 2 / t.k, h: b.h + pad * 2 / t.k };
+  ictx.save();
+  ictx.setTransform(1, 0, 0, 1, 0, 0);
+  ictx.beginPath();
+  ictx.rect(x0, y0, x1 - x0, y1 - y0);
+  ictx.clip();
+  ictx.clearRect(x0, y0, x1 - x0, y1 - y0);
+  paintStrokes(ictx, strokesOf(items).filter((s) => G.boxesOverlap(G.strokeBox(s), box)), t);
+  ictx.restore();
 }
 
 const SEL_COLOR = '#0a84ff';
@@ -245,6 +290,7 @@ function drawUi() {
 }
 
 function drawAll() {
+  clearTimeout(settleTimer);
   drawBg();
   drawInk();
   drawUi();
@@ -258,6 +304,53 @@ function requestDraw() {
   requestAnimationFrame(() => { drawQueued = false; drawAll(); });
 }
 
+// 選択枠や囲み線だけを描き直す
+let uiQueued = false;
+function requestUi() {
+  if (uiQueued || drawQueued) return;
+  uiQueued = true;
+  requestAnimationFrame(() => { uiQueued = false; if (!drawQueued) drawUi(); });
+}
+
+// 消しゴム：消えた線のまわりだけを描き直す
+let eraseQueued = false;
+function requestErase() {
+  if (eraseQueued || drawQueued) return;
+  eraseQueued = true;
+  requestAnimationFrame(() => {
+    eraseQueued = false;
+    if (drawQueued) return;
+    if (erasing && erasing.dirty) { const b = erasing.dirty; erasing.dirty = null; drawInkRegion(b); }
+    drawUi();
+  });
+}
+
+// 拡大縮小・移動：線が多いときは、描いてある線の絵をそのまま伸縮・移動させ、止まってから描き直す
+const HEAVY_POINTS = 3000;
+let settleTimer = 0;
+let viewQueued = false;
+function inkPoints() {
+  let n = 0;
+  for (const it of items) if (it.type === 'stroke') n += it.pts.length;
+  return n;
+}
+function requestViewDraw() {
+  if (xform || inkPoints() < HEAVY_POINTS) { requestDraw(); return; }
+  if (viewQueued || drawQueued) return;
+  viewQueued = true;
+  requestAnimationFrame(() => {
+    viewQueued = false;
+    if (drawQueued) return;
+    drawBg();
+    const r = view.s / inkView.s;
+    ink.style.transform = `translate(${view.tx - inkView.tx * r}px, ${view.ty - inkView.ty * r}px) scale(${r})`;
+    drawUi();
+    $('zoom').textContent = Math.round(view.s * 100) + '%';
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(requestDraw, 120);
+  });
+}
+
 // ---------- view ----------
 
 function zoomAt(cx, cy, factor) {
@@ -265,7 +358,7 @@ function zoomAt(cx, cy, factor) {
   view.s = clampScale(view.s * factor);
   view.tx = cx - w.x * view.s;
   view.ty = cy - w.y * view.s;
-  requestDraw();
+  requestViewDraw();
 }
 
 function resetView() {
@@ -373,6 +466,23 @@ function deleteSel() {
   items = items.filter((it) => !sel.has(it.id));
   setSel([]);
   commit();
+}
+
+// 選択したものを、少しずらした位置に複製する。複製したほうが選択されるので、そのまま動かせる
+function duplicateSel() {
+  if (!sel.size || busy()) return;
+  const d = 24 / view.s, now = performance.now();
+  const added = items.filter((it) => sel.has(it.id)).map((it) => {
+    const n = G.transformItem(it, { s: 1, ax: 0, ay: 0, dx: d, dy: d });
+    n.id = nextId++;
+    n.t = now;
+    delete n.base;
+    return n;
+  });
+  if (!added.length) return;
+  items = [...items, ...added];
+  commit();
+  setSel(added.map((it) => it.id));
 }
 
 // 囲んで選択したときの輪を、普通の線として残す（丸を書きたかった場合）
@@ -489,7 +599,7 @@ function updatePinch() {
   view.s = clampScale(pinch.s0 * d / pinch.d0);
   view.tx = m.x - pinch.w0.x * view.s;
   view.ty = m.y - pinch.w0.y * view.s;
-  requestDraw();
+  requestViewDraw();
 }
 
 function eraseSeg(a, b) {
@@ -499,6 +609,7 @@ function eraseSeg(a, b) {
     const pieces = it.type === 'stroke' ? G.eraseStroke(it, a, b, erasing.r) : null;
     if (!pieces) { out.push(it); continue; }
     changed = true;
+    erasing.dirty = G.unionBox([erasing.dirty, G.strokeBox(it)].filter(Boolean));
     for (const p of pieces) { p.id = nextId++; out.push(p); }
   }
   if (changed) items = out;
@@ -603,7 +714,7 @@ function onDown(e) {
   if (tool === 'eraser') {
     erasing = { last: wp, r: state.size * 3 / view.s, screen: { x: e.clientX, y: e.clientY } };
     eraseSeg(wp, wp);
-    requestDraw();
+    requestErase();
     return;
   }
   // 太さは画面上で一定。ワールド座標では表示倍率で割った値になる
@@ -628,7 +739,7 @@ function onMove(e) {
     view.tx += e.clientX - pan.x;
     view.ty += e.clientY - pan.y;
     pan.x = e.clientX; pan.y = e.clientY;
-    requestDraw();
+    requestViewDraw();
     return;
   }
   if (e.pointerId !== activeId) return;
@@ -638,7 +749,7 @@ function onMove(e) {
   if (!evs.length) evs = [e];
   if (lasso) {
     for (const ev of evs) lasso.pts.push(toWorld(ev.clientX, ev.clientY));
-    requestDraw();
+    requestUi();
     return;
   }
   if (erasing) {
@@ -648,19 +759,20 @@ function onMove(e) {
       erasing.last = w;
     }
     erasing.screen = { x: e.clientX, y: e.clientY };
-    requestDraw();
+    requestErase();
     return;
   }
   if (!cur) return;
   const ctx = cur.tool === 'hl' ? lctx : ictx;
-  prep(ctx, cur, devT());
+  const t = devT();
+  prep(ctx, cur, t);
   const minStep = 0.4 / view.s;
   for (const ev of evs) {
     const prev = cur.pts[cur.pts.length - 1];
     const pt = point(ev, prev);
     if (Math.hypot(pt.x - prev.x, pt.y - prev.y) < minStep) { prev.p = pt.p; continue; }
     cur.pts.push(pt);
-    drawSeg(ctx, cur, cur.pts.length - 1);
+    drawSeg(ctx, cur, cur.pts.length - 1, t.k);
   }
 }
 
@@ -711,8 +823,9 @@ function onUp(e) {
   const added = !cancelled && !dropTap && finishStroke(s);
   if (added && s.tool !== 'hl') {
     // 普通の線は書きながら描いてあるので、最後の端だけ足せばよい（全体は描き直さない）
-    prep(ictx, s, devT());
-    drawTail(ictx, s);
+    const t = devT();
+    prep(ictx, s, t);
+    drawTail(ictx, s, t.k);
     return;
   }
   requestDraw(); // マーカーの焼き込み、ジェスチャーで消えた/選択されたもの、取り消した線を反映
@@ -768,7 +881,7 @@ window.addEventListener('wheel', (e) => {
   } else {
     view.tx -= e.shiftKey ? e.deltaY : e.deltaX;
     view.ty -= e.shiftKey ? 0 : e.deltaY;
-    requestDraw();
+    requestViewDraw();
   }
 }, { passive: false });
 
@@ -957,6 +1070,7 @@ $('selMenu').addEventListener('click', (e) => {
   if (!b) return;
   if (b.id === 'selDelete') deleteSel();
   else if (b.id === 'selCopy') copySel();
+  else if (b.id === 'selDup') duplicateSel();
   else if (b.id === 'selKeep') keepLasso();
   updateButtons();
 });
@@ -996,6 +1110,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.ctrlKey && k === 'v') paste();
   else if (e.ctrlKey && e.shiftKey && k === 'c') { e.preventDefault(); save('view', true); }
   else if (e.ctrlKey && k === 'c') copySel();
+  else if (e.ctrlKey && k === 'd') { e.preventDefault(); duplicateSel(); }
   else if (e.ctrlKey && k === 'z' && !e.shiftKey) undo();
   else if (e.ctrlKey && (k === 'y' || (k === 'z' && e.shiftKey))) redo();
   else if (e.ctrlKey && k === 's') { e.preventDefault(); save(e.shiftKey && mode === 'freeze' ? 'all' : 'view'); }

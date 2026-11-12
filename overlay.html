@@ -10,7 +10,8 @@
     font-family: "Yu Gothic UI", "Meiryo UI", "Segoe UI", sans-serif; }
   canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
   #bg { pointer-events: none; }
-  #ink { pointer-events: none; }
+  #ink { pointer-events: none; transform-origin: 0 0; }
+  #drag { pointer-events: none; }
   #live { opacity: 0.4; touch-action: none; cursor: crosshair; }
   #ui { pointer-events: none; }
 
@@ -58,6 +59,7 @@
 <body data-mode="hidden">
   <canvas id="bg"></canvas>
   <canvas id="ink"></canvas>
+  <canvas id="drag"></canvas>
   <canvas id="live"></canvas>
   <canvas id="ui"></canvas>
   <div id="frame"></div>
@@ -105,6 +107,7 @@
 
   <div id="selMenu" class="menu float">
     <button id="selCopy" title="Ctrl+C">コピー</button>
+    <button id="selDup" title="少しずらして複製 (Ctrl+D)">複製</button>
     <button id="selDelete" title="Delete">削除</button>
     <button id="selKeep" title="囲んだ線を、選択ではなく線として残す" hidden>線として残す</button>
   </div>

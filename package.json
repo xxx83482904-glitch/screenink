@@ -10,6 +10,7 @@
     "test": "node --test test/geom.test.js",
     "test:e2e": "electron test/e2e.js",
     "test:main": "electron test/main-e2e.js",
+    "test:perf": "electron test/perf.js",
     "dist": "electron-builder --win --x64 --arm64 --publish never"
   },
   "devDependencies": {
