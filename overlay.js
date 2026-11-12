@@ -10,7 +10,8 @@ const G = Geom;
 
 const HL_ALPHA = 0.4;          // マーカーの濃さ（#live の CSS opacity と同じ値）
 const PALM_REJECT_MS = 1500;   // ペン使用中〜直後は指のタッチを無視
-const PALM_SIZE = 48;          // これより大きい接触（CSS px）はタップ選択に使わない
+// これより大きい接触（CSS px）はタップ選択に使わない。高精細の画面（Surface など）では指先でも 50px 前後になるため余裕を持たせる
+const PALM_SIZE = 90;
 const MIN_SCALE = 0.1, MAX_SCALE = 8;
 const MAX_EXPORT_PIXELS = 40e6;
 
@@ -577,10 +578,12 @@ function rulerPoint(u, v) {
   const c = Math.cos(ruler.a), s = Math.sin(ruler.a);
   return { x: ruler.cx + u * c - v * s, y: ruler.cy + u * s + v * c };
 }
-function onRuler(x, y) {
+// pad: 指で触るときは定規の外側にも少し余裕を持たせる
+const TOUCH_PAD = 18;
+function onRuler(x, y, pad = 0) {
   if (!ruler) return false;
   const l = rulerLocal(x, y);
-  return Math.abs(l.u) <= ruler.len / 2 && Math.abs(l.v) <= RULER_HALF;
+  return Math.abs(l.u) <= ruler.len / 2 + pad && Math.abs(l.v) <= RULER_HALF + pad;
 }
 
 // 書き始めの点が定規の上か縁の近くなら、沿わせる縁を返す（線の太さの半分だけ外側に置く）
@@ -688,11 +691,11 @@ function setPersp(n) {
 
 const vpScreen = (p) => ({ x: p.x * view.s + view.tx, y: p.y * view.s + view.ty });
 
-function vpHit(x, y) {
+function vpHit(x, y, r = 16) {
   if (!persp) return -1;
   for (let i = persp.vps.length - 1; i >= 0; i--) {
     const p = vpScreen(persp.vps[i]);
-    if (Math.hypot(x - p.x, y - p.y) <= 16) return i;
+    if (Math.hypot(x - p.x, y - p.y) <= r) return i;
   }
   return -1;
 }
@@ -733,7 +736,7 @@ function drawGuides() {
   uctx.globalAlpha = 1;
   sp.forEach((p, i) => {
     uctx.beginPath();
-    uctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+    uctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
     uctx.fillStyle = '#fff';
     uctx.fill();
     uctx.lineWidth = 2;
@@ -850,22 +853,22 @@ function onDown(e) {
   hideSaveMenu();
   const wp = toWorld(e.clientX, e.clientY);
   if (e.pointerType === 'touch') {
-    // 接触面が大きいもの（手のひらや指の腹）はタップとして扱わない
+    // 接触面が大きいもの（手のひら）はタップとして扱わない
     const palmLike = Math.max(e.width || 0, e.height || 0) > PALM_SIZE;
-    // 定規と消失点は、ペンを使った直後でも指で動かせる（手のひらのような大きな接触は除く）
-    const guideTouch = !palmLike && activeId === null && !vpDrag &&
-      ((touches.size === 0 && (onRuler(e.clientX, e.clientY) || vpHit(e.clientX, e.clientY) >= 0)) || (!!rulerGrab && touches.size === 1));
+    // 定規と消失点は、ペンを使った直後でも、接触の大きさに関係なく指で動かせる。
+    // ペンで書いている最中だけは動かさない（定規を押さえたまま書けるように）
+    const vi = touches.size === 0 ? vpHit(e.clientX, e.clientY, 36) : -1;
+    const onR = onRuler(e.clientX, e.clientY, TOUCH_PAD);
+    const guideTouch = activeId === null && !vpDrag &&
+      ((touches.size === 0 && (onR || vi >= 0)) || (touches.size === 1 && (!!rulerGrab || onR)));
     if ((now - lastPen < PALM_REJECT_MS && !guideTouch) || activeId !== null) return; // 手のひら / ペンやマウスで操作中
     e.preventDefault();
     if (vpDrag) return; // 消失点を動かしている間の別の指は使わない
-    if (touches.size === 0 && !palmLike) {
-      const vi = vpHit(e.clientX, e.clientY);
-      if (vi >= 0) { vpDrag = { id: e.pointerId, i: vi, touch: true }; capture(e.pointerId); return; }
-    }
+    if (vi >= 0) { vpDrag = { id: e.pointerId, i: vi, touch: true }; capture(e.pointerId); return; }
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     capture(e.pointerId);
     if (touches.size === 1) {
-      if (!palmLike && onRuler(e.clientX, e.clientY)) {
+      if (onR) {
         rulerGrab = { ids: [e.pointerId], r0: { ...ruler }, p0: { x: e.clientX, y: e.clientY } };
         touchTap = null;
         return;
@@ -875,7 +878,13 @@ function onDown(e) {
       if (hit) startXform(e.pointerId, hit, wp);
     } else {
       touchTap = null;
-      if (rulerGrab && touches.size === 2) { startRulerTwo(e.pointerId); return; } // 定規を指2本で回す
+      // 定規を指2本で回す（どちらか1本が定規に乗っていればよい）
+      if (touches.size === 2 && (rulerGrab || onR)) {
+        endXform(true);
+        if (!rulerGrab) rulerGrab = { ids: [touches.keys().next().value] };
+        startRulerTwo(e.pointerId);
+        return;
+      }
       endXform(true); // 2本目の指が来たら、選択の移動はやめてピンチにする
       if (touches.size === 2) startPinch();
     }
