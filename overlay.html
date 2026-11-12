@@ -69,6 +69,8 @@
     <button data-tool="hl">マーカー</button>
     <button data-tool="eraser">消しゴム</button>
     <button data-tool="select" title="タップで選択、囲んで複数選択 (V)">選択</button>
+    <button id="rulerBtn" title="定規を出す／しまう (R)。縁の近くで書くとまっすぐ。指2本で回す、マウスはドラッグで移動・ホイールで回転">定規</button>
+    <button id="perspBtn" title="パースのガイド線（消失点はドラッグで動かせる）">パース</button>
     <div class="sep"></div>
     <button class="sw on" data-color="#ff3b30" title="赤"><i style="background:#ff3b30"></i></button>
     <button class="sw" data-color="#ffd60a" title="黄"><i style="background:#ffd60a"></i></button>
@@ -97,6 +99,12 @@
     <button id="save" title="Ctrl+S">保存</button>
     <button id="flip" title="ツールバーを上下に移動">⇅</button>
     <button id="close" title="Esc">✕</button>
+    <div id="perspMenu" class="menu">
+      <button data-persp="1">1点透視</button>
+      <button data-persp="2">2点透視</button>
+      <button data-persp="3">3点透視</button>
+      <button data-persp="0">ガイドを消す</button>
+    </div>
     <div id="saveMenu" class="menu">
       <button id="saveView" title="デスクトップに PNG を保存し、クリップボードにもコピー (Ctrl+S)">保存：今見えている範囲</button>
       <button id="saveAll" title="デスクトップに PNG を保存し、クリップボードにもコピー (Ctrl+Shift+S)">保存：書き込みと画像の全体</button>

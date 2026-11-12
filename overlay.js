@@ -252,6 +252,8 @@ const SEL_COLOR = '#0a84ff';
 function drawUi() {
   clearCtx(uctx);
   uctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawGuides();
+  drawRuler();
   if (erasing && erasing.screen) {
     uctx.beginPath();
     uctx.arc(erasing.screen.x, erasing.screen.y, state.size * 3, 0, Math.PI * 2);
@@ -549,6 +551,198 @@ function placeSelMenu(r) {
   m.style.top = y + 'px';
 }
 
+// ---------- ruler & perspective guides ----------
+// 定規は画面に固定（拡大縮小しても大きさは変わらない）。縁の近くでペンやマウスで書くと、縁に沿ってまっすぐになる。
+// 指1本で移動、指2本で移動と回転（0°/45°/90° などに吸い付く）。マウスは定規の上をドラッグで移動、ホイールで1°ずつ回転。
+const RULER_HALF = 36;  // 定規の幅の半分（画面 px）
+const RULER_SNAP = 28;  // 縁からこの距離までに書き始めたら、定規に沿わせる
+const RULER_ANGLE_SNAP = 2.5 * Math.PI / 180;
+let ruler = null;       // {cx, cy, a, len}（画面座標。a はラジアン、時計回りが正）
+let rulerGrab = null;   // 指やマウスで定規を動かしている最中
+let curEdge = null;     // 書いている線を沿わせている縁
+
+function toggleRuler(on = !ruler) {
+  ruler = on ? { cx: window.innerWidth / 2, cy: window.innerHeight / 2, a: 0, len: Math.min(1000, window.innerWidth * 0.7) } : null;
+  rulerGrab = null;
+  updateButtons();
+  requestUi();
+}
+
+// 画面上の点を、定規の座標（u = 長さ方向、v = 幅方向）に直す
+function rulerLocal(x, y) {
+  const dx = x - ruler.cx, dy = y - ruler.cy, c = Math.cos(ruler.a), s = Math.sin(ruler.a);
+  return { u: dx * c + dy * s, v: -dx * s + dy * c };
+}
+function rulerPoint(u, v) {
+  const c = Math.cos(ruler.a), s = Math.sin(ruler.a);
+  return { x: ruler.cx + u * c - v * s, y: ruler.cy + u * s + v * c };
+}
+function onRuler(x, y) {
+  if (!ruler) return false;
+  const l = rulerLocal(x, y);
+  return Math.abs(l.u) <= ruler.len / 2 && Math.abs(l.v) <= RULER_HALF;
+}
+
+// 書き始めの点が定規の上か縁の近くなら、沿わせる縁を返す（線の太さの半分だけ外側に置く）
+function rulerEdgeFor(x, y, tool) {
+  if (!ruler) return null;
+  const l = rulerLocal(x, y);
+  if (Math.abs(l.u) > ruler.len / 2 + RULER_SNAP || Math.abs(l.v) > RULER_HALF + RULER_SNAP) return null;
+  const side = l.v < 0 ? -1 : 1;
+  return { v: side * (RULER_HALF + G.widthOf({ tool, size: state.size }, 0.5) / 2 + 1) };
+}
+
+function snapToRuler(edge, x, y) {
+  const u = Math.max(-ruler.len / 2, Math.min(ruler.len / 2, rulerLocal(x, y).u));
+  return rulerPoint(u, edge.v);
+}
+
+function setRulerAngle(a) {
+  const step = Math.PI / 4;
+  const k = Math.round(a / step);
+  ruler.a = Math.abs(a - k * step) < RULER_ANGLE_SNAP ? k * step : a;
+}
+
+function startRulerTwo(id2) {
+  const ids = [rulerGrab.ids[0], id2];
+  const a = touches.get(ids[0]), b = touches.get(ids[1]);
+  rulerGrab = { ids, r0: { ...ruler }, m0: mid(a, b), ang0: Math.atan2(b.y - a.y, b.x - a.x) };
+}
+
+function updateRulerGrab() {
+  const g = rulerGrab;
+  if (!ruler) { rulerGrab = null; return; }
+  if (g.ids.length === 1) {
+    const p = g.mouse ? g.cur : touches.get(g.ids[0]);
+    if (!p) return;
+    ruler.cx = g.r0.cx + p.x - g.p0.x;
+    ruler.cy = g.r0.cy + p.y - g.p0.y;
+  } else {
+    const a = touches.get(g.ids[0]), b = touches.get(g.ids[1]);
+    if (!a || !b) return;
+    const m = mid(a, b);
+    ruler.cx = g.r0.cx + m.x - g.m0.x;
+    ruler.cy = g.r0.cy + m.y - g.m0.y;
+    setRulerAngle(g.r0.a + Math.atan2(b.y - a.y, b.x - a.x) - g.ang0);
+  }
+  requestUi();
+}
+
+// 表示する角度（水平 = 0°、反時計回りに 0〜179°）
+function rulerDeg() {
+  let d = Math.round(-ruler.a * 180 / Math.PI) % 180;
+  if (d < 0) d += 180;
+  return d;
+}
+
+function drawRuler() {
+  if (!ruler) return;
+  const L = ruler.len, h = RULER_HALF;
+  uctx.save();
+  uctx.translate(ruler.cx, ruler.cy);
+  uctx.rotate(ruler.a);
+  uctx.fillStyle = 'rgba(28, 28, 30, 0.5)';
+  uctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+  uctx.lineWidth = 1;
+  uctx.beginPath();
+  uctx.rect(-L / 2, -h, L, h * 2);
+  uctx.fill();
+  uctx.stroke();
+  uctx.beginPath();
+  for (let i = 0; i * 10 <= L; i++) {
+    const x = -L / 2 + i * 10, t = i % 10 === 0 ? 14 : i % 5 === 0 ? 10 : 6;
+    uctx.moveTo(x, -h); uctx.lineTo(x, -h + t);
+    uctx.moveTo(x, h); uctx.lineTo(x, h - t);
+  }
+  uctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+  uctx.stroke();
+  if (Math.cos(ruler.a) < -1e-6) uctx.rotate(Math.PI); // 角度の文字は逆さにしない
+  uctx.fillStyle = '#fff';
+  uctx.font = '600 14px "Segoe UI", "Yu Gothic UI", sans-serif';
+  uctx.textAlign = 'center';
+  uctx.textBaseline = 'middle';
+  uctx.fillText(rulerDeg() + '°', 0, 0);
+  uctx.restore();
+}
+
+// パースのガイド線: 消失点（ワールド座標。撮った画面と一緒に拡大縮小・移動する）から放射状の線を出すだけ。線の補正はしない
+let persp = null;  // {n, vps: [{x, y}]}
+let vpDrag = null; // 消失点を動かしている最中 {id, i, touch?}
+const VP_COLORS = ['#0a84ff', '#ff9f0a', '#30d158'];
+const VP_RAYS = 48;
+
+function setPersp(n) {
+  hideSaveMenu();
+  vpDrag = null;
+  if (!n) {
+    persp = null;
+  } else {
+    const W = window.innerWidth, H = window.innerHeight;
+    const at = [[[W / 2, H * 0.45]], [[W * 0.12, H * 0.45], [W * 0.88, H * 0.45]],
+      [[W * 0.12, H * 0.4], [W * 0.88, H * 0.4], [W / 2, H * 0.94]]][n - 1];
+    persp = { n, vps: at.map(([x, y]) => toWorld(x, y)) };
+  }
+  updateButtons();
+  requestUi();
+}
+
+const vpScreen = (p) => ({ x: p.x * view.s + view.tx, y: p.y * view.s + view.ty });
+
+function vpHit(x, y) {
+  if (!persp) return -1;
+  for (let i = persp.vps.length - 1; i >= 0; i--) {
+    const p = vpScreen(persp.vps[i]);
+    if (Math.hypot(x - p.x, y - p.y) <= 16) return i;
+  }
+  return -1;
+}
+
+function moveVp(e) {
+  if (persp && persp.vps[vpDrag.i]) persp.vps[vpDrag.i] = toWorld(e.clientX, e.clientY);
+  requestUi();
+}
+
+function drawGuides() {
+  if (!persp) return;
+  const W = window.innerWidth, H = window.innerHeight, R = Math.hypot(W, H) * 3;
+  const sp = persp.vps.map(vpScreen);
+  uctx.save();
+  uctx.lineWidth = 1;
+  // 地平線（1点透視は消失点を通る水平線、2点・3点は左右の消失点を結ぶ線）
+  uctx.beginPath();
+  if (persp.n === 1) {
+    uctx.moveTo(0, sp[0].y); uctx.lineTo(W, sp[0].y);
+  } else {
+    const a = sp[0], b = sp[1], d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const ux = (b.x - a.x) / d, uy = (b.y - a.y) / d;
+    uctx.moveTo(a.x - ux * R, a.y - uy * R); uctx.lineTo(a.x + ux * R, a.y + uy * R);
+  }
+  uctx.strokeStyle = 'rgba(255, 59, 48, 0.7)';
+  uctx.stroke();
+  uctx.globalAlpha = 0.35;
+  sp.forEach((p, i) => {
+    uctx.beginPath();
+    for (let k = 0; k < VP_RAYS; k++) {
+      const t = k / VP_RAYS * Math.PI * 2;
+      uctx.moveTo(p.x, p.y);
+      uctx.lineTo(p.x + Math.cos(t) * R, p.y + Math.sin(t) * R);
+    }
+    uctx.strokeStyle = VP_COLORS[i];
+    uctx.stroke();
+  });
+  uctx.globalAlpha = 1;
+  sp.forEach((p, i) => {
+    uctx.beginPath();
+    uctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+    uctx.fillStyle = '#fff';
+    uctx.fill();
+    uctx.lineWidth = 2;
+    uctx.strokeStyle = VP_COLORS[i];
+    uctx.stroke();
+  });
+  uctx.restore();
+}
+
 // ---------- pointer ----------
 // ペン = 常に書く。指 = 常に操作（2本指でピンチ/移動、タップで選択）。
 // マウス = 書く（中ボタン or Space+ドラッグで移動）。選択中は、枠の中や四隅をどの入力でも掴める。
@@ -558,12 +752,14 @@ let pinch = null;
 let pan = null;
 let spaceDown = false;
 
-function point(e, prev) {
+function point(e, prev, edge) {
   let p = 0.5;
   if (e.pointerType === 'pen' && e.pressure > 0) {
     p = prev ? prev.p * 0.6 + e.pressure * 0.4 : e.pressure; // 筆圧のガタつきをならす
   }
-  const w = toWorld(e.clientX, e.clientY);
+  let sx = e.clientX, sy = e.clientY;
+  if (edge && ruler) { const q = snapToRuler(edge, sx, sy); sx = q.x; sy = q.y; } // 定規の縁に沿わせる
+  const w = toWorld(sx, sy);
   return { x: w.x, y: w.y, p };
 }
 
@@ -575,6 +771,8 @@ function endTouches() {
   touches.clear();
   pinch = null;
   touchTap = null;
+  if (rulerGrab && !rulerGrab.mouse) rulerGrab = null;
+  if (vpDrag && vpDrag.touch) vpDrag = null;
 }
 
 function twoTouches() {
@@ -652,18 +850,32 @@ function onDown(e) {
   hideSaveMenu();
   const wp = toWorld(e.clientX, e.clientY);
   if (e.pointerType === 'touch') {
-    if (now - lastPen < PALM_REJECT_MS || activeId !== null) return; // 手のひら / ペンやマウスで操作中
+    // 接触面が大きいもの（手のひらや指の腹）はタップとして扱わない
+    const palmLike = Math.max(e.width || 0, e.height || 0) > PALM_SIZE;
+    // 定規と消失点は、ペンを使った直後でも指で動かせる（手のひらのような大きな接触は除く）
+    const guideTouch = !palmLike && activeId === null && !vpDrag &&
+      ((touches.size === 0 && (onRuler(e.clientX, e.clientY) || vpHit(e.clientX, e.clientY) >= 0)) || (!!rulerGrab && touches.size === 1));
+    if ((now - lastPen < PALM_REJECT_MS && !guideTouch) || activeId !== null) return; // 手のひら / ペンやマウスで操作中
     e.preventDefault();
+    if (vpDrag) return; // 消失点を動かしている間の別の指は使わない
+    if (touches.size === 0 && !palmLike) {
+      const vi = vpHit(e.clientX, e.clientY);
+      if (vi >= 0) { vpDrag = { id: e.pointerId, i: vi, touch: true }; capture(e.pointerId); return; }
+    }
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     capture(e.pointerId);
     if (touches.size === 1) {
-      // 接触面が大きいもの（手のひらや指の腹）はタップとして扱わない
-      const palmLike = Math.max(e.width || 0, e.height || 0) > PALM_SIZE;
+      if (!palmLike && onRuler(e.clientX, e.clientY)) {
+        rulerGrab = { ids: [e.pointerId], r0: { ...ruler }, p0: { x: e.clientX, y: e.clientY } };
+        touchTap = null;
+        return;
+      }
       touchTap = palmLike ? null : { id: e.pointerId, x: e.clientX, y: e.clientY, t: now, moved: false };
       const hit = selHit(e.clientX, e.clientY, 22);
       if (hit) startXform(e.pointerId, hit, wp);
     } else {
       touchTap = null;
+      if (rulerGrab && touches.size === 2) { startRulerTwo(e.pointerId); return; } // 定規を指2本で回す
       endXform(true); // 2本目の指が来たら、選択の移動はやめてピンチにする
       if (touches.size === 2) startPinch();
     }
@@ -675,6 +887,19 @@ function onDown(e) {
     endTouches();
   }
   if (activeId !== null || pan) return;
+  // 消失点のつまみは、ペンでもマウスでも動かせる
+  if (e.pointerType !== 'mouse' || e.button === 0) {
+    const vi = vpHit(e.clientX, e.clientY);
+    if (vi >= 0) { e.preventDefault(); activeId = e.pointerId; vpDrag = { id: e.pointerId, i: vi }; capture(e.pointerId); return; }
+  }
+  // マウスは定規の上をドラッグすると定規が動く（ペンは定規の上でも書ける）
+  if (e.pointerType === 'mouse' && e.button === 0 && !spaceDown && onRuler(e.clientX, e.clientY)) {
+    e.preventDefault();
+    activeId = e.pointerId;
+    rulerGrab = { ids: [e.pointerId], mouse: true, r0: { ...ruler }, p0: { x: e.clientX, y: e.clientY }, cur: { x: e.clientX, y: e.clientY } };
+    capture(e.pointerId);
+    return;
+  }
   if (e.pointerType === 'mouse') {
     if (e.button === 1 || (e.button === 0 && spaceDown)) {
       e.preventDefault();
@@ -718,17 +943,20 @@ function onDown(e) {
     return;
   }
   // 太さは画面上で一定。ワールド座標では表示倍率で割った値になる
-  cur = { id: nextId++, type: 'stroke', tool, color: state.color, size: state.size / view.s, pts: [point(e)] };
+  curEdge = rulerEdgeFor(e.clientX, e.clientY, tool);
+  cur = { id: nextId++, type: 'stroke', tool, color: state.color, size: state.size / view.s, pts: [point(e, null, curEdge)] };
   strokeT0 = now;
   if (tool === 'hl') clearCtx(lctx);
-  if (e.pointerType === 'pen') startHold(e.pointerId, e.clientX, e.clientY);
+  if (e.pointerType === 'pen' && !curEdge) startHold(e.pointerId, e.clientX, e.clientY);
 }
 
 function onMove(e) {
   if (e.pointerType === 'touch') {
+    if (vpDrag && vpDrag.id === e.pointerId) { moveVp(e); return; }
     const t = touches.get(e.pointerId);
     if (!t) return;
     t.x = e.clientX; t.y = e.clientY;
+    if (rulerGrab && rulerGrab.ids.includes(e.pointerId)) { updateRulerGrab(); return; }
     if (touchTap && touchTap.id === e.pointerId && Math.hypot(t.x - touchTap.x, t.y - touchTap.y) > 10) touchTap.moved = true;
     if (xform && xform.id === e.pointerId) updateXform(e);
     else if (pinch && touches.size >= 2) updatePinch();
@@ -744,6 +972,8 @@ function onMove(e) {
   }
   if (e.pointerId !== activeId) return;
   e.preventDefault();
+  if (vpDrag) { moveVp(e); return; }
+  if (rulerGrab) { rulerGrab.cur = { x: e.clientX, y: e.clientY }; updateRulerGrab(); return; }
   if (xform) { updateXform(e); return; }
   let evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
   if (!evs.length) evs = [e];
@@ -769,7 +999,7 @@ function onMove(e) {
   const minStep = 0.4 / view.s;
   for (const ev of evs) {
     const prev = cur.pts[cur.pts.length - 1];
-    const pt = point(ev, prev);
+    const pt = point(ev, prev, curEdge);
     if (Math.hypot(pt.x - prev.x, pt.y - prev.y) < minStep) { prev.p = pt.p; continue; }
     cur.pts.push(pt);
     drawSeg(ctx, cur, cur.pts.length - 1, t.k);
@@ -779,9 +1009,11 @@ function onMove(e) {
 function onUp(e) {
   const cancelled = e.type === 'pointercancel';
   if (e.pointerType === 'touch') {
+    if (vpDrag && vpDrag.id === e.pointerId) { vpDrag = null; return; }
     if (!touches.has(e.pointerId)) return;
     touches.delete(e.pointerId);
     if (touches.size < 2) pinch = null;
+    if (rulerGrab && rulerGrab.ids.includes(e.pointerId)) { rulerGrab = null; touchTap = null; return; }
     const tap = touchTap && touchTap.id === e.pointerId ? touchTap : null;
     if (tap) touchTap = null;
     const moved = xform && xform.id === e.pointerId ? endXform(cancelled) : false;
@@ -796,6 +1028,8 @@ function onUp(e) {
   if (e.pointerType === 'pen') lastPen = performance.now();
   activeId = null;
   clearTimeout(holdTimer);
+  if (vpDrag) { vpDrag = null; return; }
+  if (rulerGrab) { rulerGrab = null; return; }
   if (xform) { endXform(cancelled); return; }
   if (lasso) {
     const l = lasso;
@@ -817,10 +1051,12 @@ function onUp(e) {
   }
   if (!cur) return;
   const s = cur;
+  const ruled = !!curEdge;
   cur = null;
+  curEdge = null;
   const dropTap = swallowTap && isTap(s);
   swallowTap = false;
-  const added = !cancelled && !dropTap && finishStroke(s);
+  const added = !cancelled && !dropTap && finishStroke(s, ruled);
   if (added && s.tool !== 'hl') {
     // 普通の線は書きながら描いてあるので、最後の端だけ足せばよい（全体は描き直さない）
     const t = devT();
@@ -836,9 +1072,10 @@ function onUp(e) {
 //  - 囲む（投げ縄）: 中にあるものを選択する
 // どちらも対象が無ければ普通の線として残す。撮った画面そのものは対象にしない。
 // 戻り値: 普通の線として追加したら true、ジェスチャーとして使ったら false
-function finishStroke(s) {
+// 定規に沿わせた線（ruled）はジェスチャーとして扱わない
+function finishStroke(s, ruled) {
   const t1 = performance.now();
-  if (s.tool === 'pen') {
+  if (s.tool === 'pen' && !ruled) {
     const px = 1 / view.s;
     const speed = G.pathLength(s.pts) * view.s / Math.max(1, t1 - strokeT0);
     if (G.isScratch(s.pts, px)) {
@@ -875,6 +1112,11 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 // Ctrl+ホイール（タッチパッドのピンチ）= 拡大縮小、ホイール = 移動
 window.addEventListener('wheel', (e) => {
   e.preventDefault();
+  if (ruler && onRuler(e.clientX, e.clientY)) { // 定規の上のホイールは 1° ずつ回転
+    ruler.a = (Math.round(ruler.a * 180 / Math.PI) + Math.sign(e.deltaY)) * Math.PI / 180;
+    requestUi();
+    return;
+  }
   if (mode !== 'freeze') return;
   if (e.ctrlKey) {
     zoomAt(e.clientX, e.clientY, Math.exp(-Math.max(-50, Math.min(50, e.deltaY)) * 0.006));
@@ -1045,14 +1287,22 @@ function toast(msg) {
 
 // ---------- toolbar ----------
 
-function hideSaveMenu() { $('saveMenu').classList.remove('show'); }
+function hideSaveMenu() { $('saveMenu').classList.remove('show'); $('perspMenu').classList.remove('show'); }
 
 // 保存メニューを「保存」ボタンの位置に出す（ツールバーが折り返していても合うように）
 function toggleSaveMenu() {
   const m = $('saveMenu'), b = $('save');
+  $('perspMenu').classList.remove('show');
   // 「全体」は静止モードだけ（ライブは画面そのものが範囲）
   $('saveAll').style.display = $('copyAll').style.display = mode === 'freeze' ? '' : 'none';
   m.style.left = b.offsetLeft + 'px';
+  m.classList.toggle('show');
+}
+
+function togglePerspMenu() {
+  $('saveMenu').classList.remove('show');
+  const m = $('perspMenu');
+  m.style.left = $('perspBtn').offsetLeft + 'px';
   m.classList.toggle('show');
 }
 
@@ -1061,6 +1311,9 @@ function updateButtons() {
   document.querySelectorAll('[data-color]').forEach((b) => b.classList.toggle('on', b.dataset.color === state.color));
   document.querySelectorAll('[data-size]').forEach((b) => b.classList.toggle('on', Number(b.dataset.size) === state.size));
   live.style.cursor = state.tool === 'select' ? 'default' : 'crosshair';
+  $('rulerBtn').classList.toggle('on', !!ruler);
+  $('perspBtn').classList.toggle('on', !!persp);
+  document.querySelectorAll('[data-persp]').forEach((b) => b.classList.toggle('on', !!persp && Number(b.dataset.persp) === persp.n));
   $('undo').disabled = hi === 0 && !pendingLasso;
   $('redo').disabled = hi >= history.length - 1;
 }
@@ -1078,10 +1331,13 @@ $('selMenu').addEventListener('click', (e) => {
 $('bar').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
-  if (b.id !== 'save') hideSaveMenu();
+  if (b.id !== 'save' && b.id !== 'perspBtn') hideSaveMenu();
   if (b.dataset.tool) { state.tool = b.dataset.tool; if (state.tool !== 'select') clearSel(); }
   else if (b.dataset.color) { state.color = b.dataset.color; if (state.tool === 'eraser') state.tool = 'pen'; }
   else if (b.dataset.size) state.size = Number(b.dataset.size);
+  else if (b.dataset.persp != null) setPersp(Number(b.dataset.persp));
+  else if (b.id === 'rulerBtn') toggleRuler();
+  else if (b.id === 'perspBtn') togglePerspMenu();
   else if (b.id === 'undo') undo();
   else if (b.id === 'redo') redo();
   else if (b.id === 'clear') clearAll();
@@ -1121,6 +1377,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'h') state.tool = 'hl';
   else if (k === 'e') state.tool = 'eraser';
   else if (k === 'v') state.tool = 'select';
+  else if (k === 'r') toggleRuler();
   if (state.tool !== 'select' && 'phe'.includes(k) && k.length === 1) clearSel();
   updateButtons();
 });
@@ -1133,6 +1390,9 @@ api.onMode(async ({ mode: m, image, size, keepInk }) => {
   mode = m;
   document.body.dataset.mode = m;
   cur = null;
+  curEdge = null;
+  rulerGrab = null;
+  vpDrag = null;
   erasing = null;
   activeId = null;
   pan = null;
@@ -1164,4 +1424,4 @@ resize();
 updateButtons();
 
 // 動作確認用（開発者ツールや自動テストから状態を見る）
-window.__ink = { get items() { return items; }, get mode() { return mode; }, get selection() { return sel; }, view, state };
+window.__ink = { get ruler() { return ruler; }, get persp() { return persp; }, get items() { return items; }, get mode() { return mode; }, get selection() { return sel; }, view, state };
